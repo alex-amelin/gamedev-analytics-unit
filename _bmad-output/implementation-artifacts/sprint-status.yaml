@@ -1,0 +1,81 @@
+# generated: 2026-05-23
+# last_updated: 2026-05-23
+# project: gamedev-analytics-unit
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: _bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog -> in-progress: Automatically when first story is created (via create-story)
+#   - in-progress -> done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-05-23
+last_updated: 2026-05-23
+# story 1-1 contexted → ready-for-dev (2026-05-23)
+project: gamedev-analytics-unit
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+
+development_status:
+  # Epic 1: Каркас юнита и канал Logs API
+  epic-1: in-progress
+  1-1-uv-каркас-раскладка-проекта-и-ci: done
+  1-2-env-ридер-кредов-метрики: backlog
+  1-3-вендоринг-metricaclient-с-развязкой-шва-кредов: backlog
+  1-4-безопасная-граница-дат-clamp-вчера-по-мск: backlog
+  1-5-загрузчик-каталога-схемы-и-маппинг-типов: backlog
+  1-6-cli-примитивы-жизненного-цикла-logs-api: backlog
+  epic-1-retrospective: optional
+
+  # Epic 2: Приём данных и безопасное обновление хранилища
+  epic-2: backlog
+  2-1-соединение-duckdb-и-резолюция-путей-хранилища: backlog
+  2-2-атомарная-запись-parquet-партиции-дня: backlog
+  2-3-жёсткая-сверка-строк: backlog
+  2-4-мета-таблица-load-state-реконсиляция-мета-факт: backlog
+  2-5-лок-одного-писателя: backlog
+  2-6-рабочий-слой-view-ы-из-каталога-с-try-cast: backlog
+  2-7-оркестратор-приёма-за-день-p81-полный-цикл: backlog
+  2-8-инкремент-идемпотентный-перезалив-и-hot-window: backlog
+  2-9-команда-gdau-logs-update: backlog
+  epic-2-retrospective: optional
+
+  # Epic 3: Доступ агента к данным через MCP
+  epic-3: backlog
+  3-1-вендоринг-mcp-сервера-и-инструмент-duckdb-query: backlog
+  3-2-сервисные-команды-mcp-и-авто-экспорт-аудит: backlog
+  3-3-контекст-схема-под-нашу-схему-снятие-directaiq-специфики: backlog
+  epic-3-retrospective: optional
+
+  # Epic 4: Развёртывание рабочего пространства игры (init)
+  epic-4: backlog
+  4-1-декларативный-симлинк-контракт-и-preflight: backlog
+  4-2-шаблон-хранилища-и-файл-описания-проекта: backlog
+  4-3-init-команда-gdau-init-разворачивает-хранилище: backlog
+  epic-4-retrospective: optional

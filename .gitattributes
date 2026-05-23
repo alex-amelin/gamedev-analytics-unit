@@ -1,0 +1,21 @@
+# Детерминированные окончания строк на всех ОС (NFR-2: переносимость Win↔Linux).
+# Текстовые файлы хранятся в репо и выгружаются с LF — поведение не зависит
+# от локального core.autocrlf конкретного разработчика.
+* text=auto eol=lf
+
+# Явно текстовые типы проекта (на случай неверной автодетекции)
+*.py             text eol=lf
+*.toml           text eol=lf
+*.yml            text eol=lf
+*.yaml           text eol=lf
+*.md             text eol=lf
+*.csv            text eol=lf
+*.lock           text eol=lf
+.python-version  text eol=lf
+.gitignore       text eol=lf
+.gitattributes   text eol=lf
+
+# Бинарные артефакты хранилища — НЕ нормализовать окончания строк
+*.duckdb      binary
+*.duckdb.wal  binary
+*.parquet     binary

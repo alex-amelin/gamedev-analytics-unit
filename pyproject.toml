@@ -1,0 +1,41 @@
+[project]
+name = "gamedev-analytics-unit"
+version = "0.1.0"
+description = "Game Dev Analytics Unit — воспроизводимый юнит приёма и анализа данных Яндекс Метрики через Logs API"
+readme = "README.md"
+authors = [
+    { name = "Alex Amelin", email = "aleksander.amelin@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "duckdb>=1.5,<1.6",
+    "mcp>=1.2",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+    "requests>=2.31",
+]
+
+[project.scripts]
+gdau-logs = "scripts.tools.logs_api_cli:main"
+gdau-init = "scripts.init.init_project:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Ключ к AC #5: hatchling пакует каталог scripts/ (а НЕ пакет по имени проекта),
+# поэтому `import scripts.utils` резолвится и под `uv run`, и в установленном окружении.
+[tool.hatch.build.targets.wheel]
+packages = ["scripts"]
+
+[tool.mypy]
+python_version = "3.13"
+explicit_package_bases = true
+namespace_packages = true        # с explicit_package_bases + вложенными __init__.py нужно, иначе ошибки резолюции базы пакета
+strict = true
+
+[dependency-groups]
+dev = [
+    "mypy>=1.0",
+    "pytest>=8",
+]

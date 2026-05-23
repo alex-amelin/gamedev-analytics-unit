@@ -18,6 +18,10 @@ venv/
 *.duckdb.wal
 *.parquet
 
+# --- Data / storage artifacts (per-game хранилище, не dev-репо) ---
+data/
+*.writer.lock
+
 # --- OS ---
 .DS_Store
 Thumbs.db

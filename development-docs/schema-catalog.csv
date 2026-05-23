@@ -1,0 +1,116 @@
+source,storage_name,metrica_field,type,description
+visits,visit_id,ym:s:visitID,HUGEINT,"Идентификатор визита, уникален в рамках одного года"
+visits,watch_ids,ym:s:watchIDs,HUGEINT[],"Просмотры, которые были в данном визите. Ограничение массива — 500 просмотров"
+visits,date,ym:s:date,DATE,Дата визита
+visits,date_time,ym:s:dateTime,TIMESTAMP,Дата и время визита (в часовом поясе счетчика)
+visits,is_new_user,ym:s:isNewUser,BOOLEAN,Первый визит посетителя
+visits,start_url,ym:s:startURL,VARCHAR,Страница входа
+visits,end_url,ym:s:endURL,VARCHAR,Страница выхода
+visits,page_views,ym:s:pageViews,INTEGER,Глубина просмотра (детально)
+visits,visit_duration,ym:s:visitDuration,BIGINT,Время на сайте (детально)
+visits,bounce,ym:s:bounce,BOOLEAN,Отказность
+visits,region_country,ym:s:regionCountry,VARCHAR,Страна (ISO)
+visits,client_id,ym:s:clientID,HUGEINT,Анонимный идентификатор пользователя в браузере (first-party cookies)
+visits,is_robot_pro,ym:s:isRobotPro,BOOLEAN,"Роботность визита по данным антифрода Директа и поведению на сайте. Возможные значения: 0 — не роботный визит, 1 — роботный визит.; Данные в поле актуальны с 19 апреля 2025 года и доступны только на счетчиках в Метрике Про."
+visits,goals_id,ym:s:goalsID,BIGINT[],"Номера целей, достигнутых за данный визит"
+visits,goals_serial_number,ym:s:goalsSerialNumber,BIGINT[],Порядковые номера достижений цели с конкретным идентификатором
+visits,goals_date_time,ym:s:goalsDateTime,TIMESTAMP[],Время достижения каждой цели (в часовом поясе UTC+3)
+visits,goals_price,ym:s:goalsPrice,BIGINT[],Ценность цели
+visits,goals_order,ym:s:goalsOrder,VARCHAR[],Идентификатор заказов
+visits,goals_currency,ym:s:goalsCurrency,VARCHAR[],Идентификатор валюты
+visits,traffic_source,ym:s:TrafficSource,VARCHAR,Источник трафика
+visits,adv_engine,ym:s:AdvEngine,VARCHAR,Рекламная система
+visits,referal_source,ym:s:ReferalSource,VARCHAR,Переход с сайтов
+visits,search_engine_root,ym:s:SearchEngineRoot,VARCHAR,Поисковая система
+visits,search_engine,ym:s:SearchEngine,VARCHAR,Поисковая система (детально)
+visits,social_network,ym:s:SocialNetwork,VARCHAR,Cоциальная сеть
+visits,social_network_profile,ym:s:SocialNetworkProfile,VARCHAR,Группа социальной сети
+visits,referer,ym:s:referer,VARCHAR,Реферер
+visits,direct_click_order,ym:s:DirectClickOrder,BIGINT,Кампания Яндекс Директа
+visits,direct_banner_group,ym:s:DirectBannerGroup,BIGINT,Группа объявлений
+visits,direct_click_banner,ym:s:DirectClickBanner,VARCHAR,Объявление Яндекс Директа
+visits,direct_click_order_name,ym:s:DirectClickOrderName,VARCHAR,Название кампании Яндекс Директа
+visits,click_banner_group_name,ym:s:ClickBannerGroupName,VARCHAR,Название группы объявлений
+visits,direct_click_banner_name,ym:s:DirectClickBannerName,VARCHAR,Название объявления Яндекс Директа
+visits,direct_phrase_or_cond,ym:s:DirectPhraseOrCond,VARCHAR,Условие показа объявления
+visits,direct_platform_type,ym:s:DirectPlatformType,VARCHAR,Тип площадки
+visits,direct_platform,ym:s:DirectPlatform,VARCHAR,Площадка
+visits,direct_condition_type,ym:s:DirectConditionType,VARCHAR,Тип условия показа объявления
+visits,utm_campaign,ym:s:UTMCampaign,VARCHAR,UTM Campaign
+visits,utm_content,ym:s:UTMContent,VARCHAR,UTM Content
+visits,utm_medium,ym:s:UTMMedium,VARCHAR,UTM Medium
+visits,utm_source,ym:s:UTMSource,VARCHAR,UTM Source
+visits,utm_term,ym:s:UTMTerm,VARCHAR,UTM Term
+visits,device_category,ym:s:deviceCategory,VARCHAR,"Тип устройства. Возможные значения: 1 — десктоп, 2 — мобильные телефоны, 3 — планшеты, 4 — TV"
+visits,operating_system_root,ym:s:operatingSystemRoot,VARCHAR,Группа операционных систем
+visits,browser,ym:s:browser,VARCHAR,Браузер
+visits,screen_format,ym:s:screenFormat,VARCHAR,Соотношение сторон. Возможные значения:; - undefined;; - 9:21;; - 9:16;; - 3:5;; - 10:16;; - 2:3;; - 3:4;; - 4:5;; - 5:4;; - 4:3;; - 3:2;; - 16:10;; - 5:3;; - 16:9;; - 21:9.
+visits,screen_orientation,ym:s:screenOrientation,SMALLINT,"Ориентация экрана. 1 - portrait, 2 - landscape"
+visits,screen_width,ym:s:screenWidth,INTEGER,Логическая ширина
+visits,screen_height,ym:s:screenHeight,INTEGER,Логическая высота
+visits,purchase_id,ym:s:purchaseID,VARCHAR[],Идентификатор покупки. Список всех идентификаторов транзакций для визита. Идентификаторы уникальные.
+visits,purchase_date_time,ym:s:purchaseDateTime,TIMESTAMP[],Дата и время покупки
+visits,purchase_revenue,ym:s:purchaseRevenue,DOUBLE[],Общий доход или суммарная ценность транзакции
+visits,purchase_currency,ym:s:purchaseCurrency,VARCHAR[],Валюта транзакции
+visits,events_product_price,ym:s:eventsProductPrice,BIGINT[],Цена товара
+visits,events_product_event_time,ym:s:eventsProductEventTime,TIMESTAMP[],Дата и время события
+visits,events_product_type,ym:s:eventsProductType,SMALLINT[],Тип события. Возможные значения:; - view_item_list — просмотр списка товара;; - click — клик по товару;; - detail — просмотр карточки товара;; - add — добавление товара в корзину;; - purchase — покупка;; - remove — удаление товара из корзины.
+visits,events_product_name,ym:s:eventsProductName,VARCHAR[],Название товара
+visits,products_purchase_id,ym:s:productsPurchaseID,VARCHAR[],"Идентификатор покупки. Для каждого купленного товара ym:s:productsID указывается транзакция, в рамках которой он был куплен. Идентификаторы могут дублироваться."
+visits,products_id,ym:s:productsID,VARCHAR[],Идентификатор или код купленного товара
+visits,products_name,ym:s:productsName,VARCHAR[],Название купленного товара
+visits,products_price,ym:s:productsPrice,DOUBLE[],Цена купленного товара
+visits,products_currency,ym:s:productsCurrency,VARCHAR[],Валюта купленного товара
+visits,parsed_params_key1,ym:s:parsedParamsKey1,VARCHAR[],"Параметры визита, ур. 1"
+visits,parsed_params_key2,ym:s:parsedParamsKey2,VARCHAR[],"Параметры визита, ур. 2"
+visits,parsed_params_key3,ym:s:parsedParamsKey3,VARCHAR[],"Параметры визита, ур. 3"
+visits,parsed_params_key4,ym:s:parsedParamsKey4,VARCHAR[],"Параметры визита, ур. 4"
+visits,parsed_params_key5,ym:s:parsedParamsKey5,VARCHAR[],"Параметры визита, ур. 5"
+visits,parsed_params_key6,ym:s:parsedParamsKey6,VARCHAR[],"Параметры визита, ур. 6"
+visits,parsed_params_key7,ym:s:parsedParamsKey7,VARCHAR[],"Параметры визита, ур. 7"
+visits,parsed_params_key8,ym:s:parsedParamsKey8,VARCHAR[],"Параметры визита, ур. 8"
+visits,parsed_params_key9,ym:s:parsedParamsKey9,VARCHAR[],"Параметры визита, ур. 9"
+visits,parsed_params_key10,ym:s:parsedParamsKey10,VARCHAR[],"Параметры визита, ур. 10"
+visits,recommendation_system,ym:s:RecommendationSystem,VARCHAR,Переход из рекомендательных систем. Подробнее о параметре
+visits,messenger,ym:s:Messenger,VARCHAR,Переход из мессенджера. Подробнее о параметре
+hits,watch_id,ym:pv:watchID,HUGEINT,Идентификатор события
+hits,page_view_id,ym:pv:pageViewID,BIGINT,"Идентификатор просмотра, в рамках которого произошло событие"
+hits,client_id,ym:pv:clientID,HUGEINT,Анонимный идентификатор пользователя в браузере (first-party cookies)
+hits,date,ym:pv:date,DATE,Дата события
+hits,date_time,ym:pv:dateTime,TIMESTAMP,Дата и время события (в часовом поясе счетчика)
+hits,goals_id,ym:pv:goalsID,BIGINT[],"Номера целей, достигнутых в данном событии"
+hits,url,ym:pv:URL,VARCHAR,Адрес страницы
+hits,referer,ym:pv:referer,VARCHAR,Реферер
+hits,utm_campaign,ym:pv:UTMCampaign,VARCHAR,UTM Campaign
+hits,utm_content,ym:pv:UTMContent,VARCHAR,UTM Content
+hits,utm_medium,ym:pv:UTMMedium,VARCHAR,UTM Medium
+hits,utm_source,ym:pv:UTMSource,VARCHAR,UTM Source
+hits,utm_term,ym:pv:UTMTerm,VARCHAR,UTM Term
+hits,last_traffic_source,ym:pv:lastTrafficSource,VARCHAR,Источник трафика
+hits,last_search_engine_root,ym:pv:lastSearchEngineRoot,VARCHAR,Поисковая система
+hits,last_search_engine,ym:pv:lastSearchEngine,VARCHAR,Поисковая система (детально)
+hits,last_adv_engine,ym:pv:lastAdvEngine,VARCHAR,Рекламная система
+hits,last_social_network,ym:pv:lastSocialNetwork,VARCHAR,Социальная сеть
+hits,last_social_network_profile,ym:pv:lastSocialNetworkProfile,VARCHAR,"Страница социальной сети, с которой был переход"
+hits,recommendation_system,ym:pv:recommendationSystem,VARCHAR,Рекомендательная система
+hits,messenger,ym:pv:messenger,VARCHAR,Мессенджер
+hits,browser,ym:pv:browser,VARCHAR,Браузер
+hits,device_category,ym:pv:deviceCategory,VARCHAR,Тип устройства. Возможные значения:; - 1 — десктоп;; - 2 — мобильные телефоны;; - 3 — планшеты;; - 4 — TV
+hits,operating_system_root,ym:pv:operatingSystemRoot,VARCHAR,Группа операционных систем
+hits,screen_format,ym:pv:screenFormat,VARCHAR,Соотношение сторон. Возможные значения:; - undefined;; - 9:21;; - 9:16;; - 3:5;; - 10:16;; - 2:3;; - 3:4;; - 4:5;; - 5:4;; - 4:3;; - 3:2;; - 16:10;; - 5:3;; - 16:9;; - 21:9.
+hits,screen_height,ym:pv:screenHeight,INTEGER,Логическая высота
+hits,screen_orientation,ym:pv:screenOrientation,SMALLINT,"Ориентация экрана. 1 - portrait, 2 - landscape"
+hits,screen_width,ym:pv:screenWidth,INTEGER,Логическая ширина
+hits,region_country,ym:pv:regionCountry,VARCHAR,Страна (ISO)
+hits,ecommerce,ym:pv:ecommerce,VARCHAR,События электронной коммерции
+hits,params,ym:pv:params,VARCHAR,Параметры
+hits,parsed_params_key1,ym:pv:parsedParamsKey1,VARCHAR[],"Параметры просмотра, ур. 1"
+hits,parsed_params_key2,ym:pv:parsedParamsKey2,VARCHAR[],"Параметры просмотра, ур. 2"
+hits,parsed_params_key3,ym:pv:parsedParamsKey3,VARCHAR[],"Параметры просмотра, ур. 3"
+hits,parsed_params_key4,ym:pv:parsedParamsKey4,VARCHAR[],"Параметры просмотра, ур. 4"
+hits,parsed_params_key5,ym:pv:parsedParamsKey5,VARCHAR[],"Параметры просмотра, ур. 5"
+hits,parsed_params_key6,ym:pv:parsedParamsKey6,VARCHAR[],"Параметры просмотра, ур. 6"
+hits,parsed_params_key7,ym:pv:parsedParamsKey7,VARCHAR[],"Параметры просмотра, ур. 7"
+hits,parsed_params_key8,ym:pv:parsedParamsKey8,VARCHAR[],"Параметры просмотра, ур. 8"
+hits,parsed_params_key9,ym:pv:parsedParamsKey9,VARCHAR[],"Параметры просмотра, ур. 9"
+hits,parsed_params_key10,ym:pv:parsedParamsKey10,VARCHAR[],"Параметры просмотра, ур. 10"

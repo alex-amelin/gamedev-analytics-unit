@@ -1,0 +1,23 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Env / secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Data artifacts (живут во внешнем per-game хранилище, не в dev-репо) ---
+*.duckdb
+*.duckdb.wal
+*.parquet
+
+# --- OS ---
+.DS_Store
+Thumbs.db

@@ -28,6 +28,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["scripts"]
 
+[tool.pytest.ini_options]
+# live по умолчанию выключен (CI его не гоняет); явный запуск: uv run pytest -m live.
+# Без addopts маркер live под --strict-markers дал бы предупреждение/ошибку.
+markers = ["live: smoke против реального Logs API (нужны креды; не в CI)"]
+addopts = "-m 'not live'"
+
 [tool.mypy]
 python_version = "3.13"
 explicit_package_bases = true

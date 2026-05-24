@@ -1,6 +1,6 @@
 # Story 1.3: Вендоринг `MetricaClient` с развязкой шва кредов
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -30,11 +30,11 @@ so that иметь проверенный примитив доступа к Log
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Перенести клиент в `scripts/utils/metrica_client.py` и развязать шов кредов (AC: #1)**
-  - [ ] Создать `scripts/utils/metrica_client.py`. Источник для копирования: `G:\git\directaiq\scripts\utils\metrica_client.py` (ref `7718bd65`, ветка `master`, 2026-05-22). _См. Dev Notes → «Источник вендоринга и карта переноса»._
-  - [ ] **Шапка модуля (обязательна, AC #1):** первой строкой docstring-блока — пометка `vendored from directaiq @ 7718bd65, seam: creds injected` (формат из architecture#Structure Patterns). Модульный docstring — **на русском**: роль модуля (клиент Logs API на `requests`, креды инжектятся, reporting/polars обрезаны).
-  - [ ] **`from __future__ import annotations`** — первой строкой кода (инвариант проекта; в источнике её НЕТ — добавить).
-  - [ ] **Развязать конструктор (ядро шва):** заменить
+- [x] **Task 1 — Перенести клиент в `scripts/utils/metrica_client.py` и развязать шов кредов (AC: #1)**
+  - [x] Создать `scripts/utils/metrica_client.py`. Источник для копирования: `G:\git\directaiq\scripts\utils\metrica_client.py` (ref `7718bd65`, ветка `master`, 2026-05-22). _См. Dev Notes → «Источник вендоринга и карта переноса»._
+  - [x] **Шапка модуля (обязательна, AC #1):** первой строкой docstring-блока — пометка `vendored from directaiq @ 7718bd65, seam: creds injected` (формат из architecture#Structure Patterns). Модульный docstring — **на русском**: роль модуля (клиент Logs API на `requests`, креды инжектятся, reporting/polars обрезаны).
+  - [x] **`from __future__ import annotations`** — первой строкой кода (инвариант проекта; в источнике её НЕТ — добавить).
+  - [x] **Развязать конструктор (ядро шва):** заменить
     ```python
     def __init__(self, counter_id: str | None = None) -> None:
         token, self.counter_id = AuthManager.get_metrica_credentials()
@@ -56,29 +56,29 @@ so that иметь проверенный примитив доступа к Log
         self.current_date = datetime.now().date()
     ```
     Сигнатура — ровно `(token: str, counter_id: int)`: контракт с 1.2 (`read_metrica_credentials()` отдаёт `MetricaCredentials(token, counter_id)`) и 1.6 (CLI свяжет: `c = read_metrica_credentials(); MetricaClient(token=c.token, counter_id=c.counter_id)`). _[anti-coupling: НЕ импортировать `env_reader` в клиент — креды инжектит вызывающий; шов остаётся чистым и тестируемым]_
-  - [ ] **`counter_id` — `int`** (1.2 уже привёл и провалидировал). В URL-путях f-строка сериализует `int` корректно (`f"/management/v1/counter/{self.counter_id}"`). НЕ ре-валидировать здесь (валидация — зона 1.2; дублировать нельзя).
-  - [ ] **Убрать `from .auth_manager import AuthManager`** полностью (AC #1, #2 — нет тяжёлых зависимостей).
-- [ ] **Task 2 — Обрезать reporting/Stat/Direct/polars; оставить Logs API + info (AC: #2)**
-  - [ ] **СОХРАНИТЬ (методы жизненного цикла Logs API):** `create_log_request`, `get_log_requests`, `get_log_request`, `download_log_request_part`, `clean_log_request`, `evaluate_log_request`.
-  - [ ] **СОХРАНИТЬ (лёгкие management info-методы — architecture#API Patterns):** `get_counter_info`, `get_counters`, `get_goals`. Все три ходят в `/management/v1/...` через `make_request`, polars не трогают.
-  - [ ] **СОХРАНИТЬ (HTTP-плумбинг, без изменений):** `_rate_limit`, `_check_response_errors`, `make_request`, `_handle_request_error` и классовые константы (`BASE_URL`, `MAX_REQUESTS_PER_SECOND`, `MAX_REQUESTS_PER_DAY`, `MAX_ROWS_PER_REQUEST`, `_RETRYABLE_STATUS_CODES`, `_MAX_RETRIES`, `_RETRY_DELAYS`). _Не переписывать (AC #3) — см. Dev Notes → «Retry/rate-limit»._
-  - [ ] **ВЫРЕЗАТЬ (Stat/Reporting API + polars):** `get_search_queries_data`, `collect_all_search_queries`, `get_report`, `get_report_paginated`, `get_raw_report`, `get_goals_detailed`, `get_goals_stats`, статический хелпер `_detect_table_prefix`.
-  - [ ] **ВЫРЕЗАТЬ (Direct-специфика):** `get_direct_clients`; модульные константы `DIRECT_TO_METRICA_ATTRIBUTION`, `ATTRIBUTABLE_DIMENSIONS` (атрибуция отчётного API).
-  - [ ] **ВЫРЕЗАТЬ (явно названо в AC #2):** `upload_offline_conversions`.
-  - [ ] **Убрать `import polars as pl`** (строка 12 источника). После обрезки методов прогнать поиск `polars`/`pl\.` по файлу — должно быть **пусто** (иначе остался непорезанный метод). _[edge-case: остаточная ссылка на polars завалит импорт — polars не в зависимостях]_
-  - [ ] **Заменить логгер на stdlib:** в источнике `from .logging_utils import get_logger; logger = get_logger(__name__)` → у нас `import logging; logger = logging.getLogger(__name__)` (как в `env_reader.py`; project-context «только stdlib logging»). НЕ вендорить `logging_utils.py` — не нужен, anti-scope. _См. Dev Notes → «logging_utils»._
-  - [ ] **`__all__`** свести к `["MetricaClient"]` (убрать `ATTRIBUTABLE_DIMENSIONS`/`DIRECT_TO_METRICA_ATTRIBUTION`).
-  - [ ] **Импорты после обрезки:** `import logging`, `import time`, `from datetime import datetime`, `from typing import Any, NoReturn`, `import requests`. (`datetime` нужен `_rate_limit`; `NoReturn` — `_handle_request_error`.)
-  - [ ] **Method-docstring'и оставленных методов — НЕ переписывать** (английские, как в источнике) для сравнимости с оригиналом (project-context «вендоренное не причёсывать вразнобой»). Русский — только модульный docstring + шапка. _См. Dev Notes → «Язык docstring'ов в вендоренном коде»._
-- [ ] **Task 3 — Подтвердить сохранность retry/rate-limit и путей ошибок (AC: #3, #5, #6)** — _реализации нового кода нет; задача — убедиться, что вендоренное поведение не сломано переносом, и покрыть тестами_
-  - [ ] Убедиться, что `make_request` сохранил: цикл `range(_MAX_RETRIES)` с `_rate_limit()` на каждой попытке; retry с `time.sleep(_RETRY_DELAYS[attempt])` на статусах `{429,500,502,503}` пока `attempt < _MAX_RETRIES-1`; иначе/при не-ретраябельном статусе/при ошибке без `response` — немедленный `raise RuntimeError(error_detail)`.
-  - [ ] **Зафиксировать (не баг, для тестов AC #5/#6) — асимметрия ретраев в источнике:** GET-методы (`get_*`, `evaluate_log_request`) идут через `make_request` → **ретраятся**. POST/download (`create_log_request`, `clean_log_request`, `download_log_request_part`) вызывают `session.post/get` напрямую и обрабатывают ошибку через `_handle_request_error` → **НЕ ретраятся**, сразу `RuntimeError`. Это вендоренное поведение — сохранить как есть (AC #3 «заново не реализуется»), не «выравнивать». _См. Dev Notes → «Retry/rate-limit»._
-  - [ ] **AC #6 (не-ретраябельный HTTP без бессмысленных ретраев):** убедиться, что 401/403/404 (вне `_RETRYABLE_STATUS_CODES`) в `make_request` проваливаются мимо ветки retry сразу в `raise RuntimeError(error_detail)`; `error_detail` уже включает `str(e)` (несёт HTTP-статус, напр. «404 Client Error») + API-`message`/`errors` из тела. Этого достаточно для «классифицируется … с понятным сообщением». **Не добавлять** тяжёлой логики классификации — минимальное вендоренное поведение удовлетворяет AC (главное — «без бессмысленных ретраев»). _См. Dev Notes → «AC #6 — что именно требуется»._
-  - [ ] **AC #5 (терминальный путь + connection-level):** убедиться, что (а) исчерпание ретраев на устойчивых 429/5xx даёт `RuntimeError` (не «голый» трейсбек, не зависание); (б) ошибка сетевого уровня (`requests.exceptions.ConnectionError`/`Timeout`, у которой `response is None` → `status_code is None` → не в retryable-наборе) даёт немедленный `RuntimeError`.
-- [ ] **Task 4 — Offline-тесты `tests/test_metrica_client.py` (AC: #1, #2, #3, #5, #6)** — _см. Dev Notes → «Тестирование»_
-  - [ ] `from __future__ import annotations`; без сети. Мокать `requests`-сессию через `unittest.mock` (stdlib): сконструировать клиент с фиктивными `token="t"`, `counter_id=42`, затем подменить `client.session` на `MagicMock`, настраивая `session.get/post.return_value` (mock-`Response` с `.json()`, `.raise_for_status()`, `.content`, `.status_code`) или `.side_effect` (список для retry).
-  - [ ] **КРИТИЧНО — заглушить `time.sleep`:** `monkeypatch.setattr("scripts.utils.metrica_client.time.sleep", lambda *a, **k: None)` (autouse-fixture). Иначе retry-тесты реально спят 30/60с, а `_rate_limit` — до 1/30с. Без этого набор повиснет/будет медленным. _[ловушка: тесты ретраев «зависают»]_
-  - [ ] Кейсы (минимум):
+  - [x] **`counter_id` — `int`** (1.2 уже привёл и провалидировал). В URL-путях f-строка сериализует `int` корректно (`f"/management/v1/counter/{self.counter_id}"`). НЕ ре-валидировать здесь (валидация — зона 1.2; дублировать нельзя).
+  - [x] **Убрать `from .auth_manager import AuthManager`** полностью (AC #1, #2 — нет тяжёлых зависимостей).
+- [x] **Task 2 — Обрезать reporting/Stat/Direct/polars; оставить Logs API + info (AC: #2)**
+  - [x] **СОХРАНИТЬ (методы жизненного цикла Logs API):** `create_log_request`, `get_log_requests`, `get_log_request`, `download_log_request_part`, `clean_log_request`, `evaluate_log_request`.
+  - [x] **СОХРАНИТЬ (лёгкие management info-методы — architecture#API Patterns):** `get_counter_info`, `get_counters`, `get_goals`. Все три ходят в `/management/v1/...` через `make_request`, polars не трогают.
+  - [x] **СОХРАНИТЬ (HTTP-плумбинг, без изменений):** `_rate_limit`, `_check_response_errors`, `make_request`, `_handle_request_error` и классовые константы (`BASE_URL`, `MAX_REQUESTS_PER_SECOND`, `MAX_REQUESTS_PER_DAY`, `MAX_ROWS_PER_REQUEST`, `_RETRYABLE_STATUS_CODES`, `_MAX_RETRIES`, `_RETRY_DELAYS`). _Не переписывать (AC #3) — см. Dev Notes → «Retry/rate-limit»._
+  - [x] **ВЫРЕЗАТЬ (Stat/Reporting API + polars):** `get_search_queries_data`, `collect_all_search_queries`, `get_report`, `get_report_paginated`, `get_raw_report`, `get_goals_detailed`, `get_goals_stats`, статический хелпер `_detect_table_prefix`.
+  - [x] **ВЫРЕЗАТЬ (Direct-специфика):** `get_direct_clients`; модульные константы `DIRECT_TO_METRICA_ATTRIBUTION`, `ATTRIBUTABLE_DIMENSIONS` (атрибуция отчётного API).
+  - [x] **ВЫРЕЗАТЬ (явно названо в AC #2):** `upload_offline_conversions`.
+  - [x] **Убрать `import polars as pl`** (строка 12 источника). После обрезки методов прогнать поиск `polars`/`pl\.` по файлу — должно быть **пусто** (иначе остался непорезанный метод). _[edge-case: остаточная ссылка на polars завалит импорт — polars не в зависимостях]_
+  - [x] **Заменить логгер на stdlib:** в источнике `from .logging_utils import get_logger; logger = get_logger(__name__)` → у нас `import logging; logger = logging.getLogger(__name__)` (как в `env_reader.py`; project-context «только stdlib logging»). НЕ вендорить `logging_utils.py` — не нужен, anti-scope. _См. Dev Notes → «logging_utils»._
+  - [x] **`__all__`** свести к `["MetricaClient"]` (убрать `ATTRIBUTABLE_DIMENSIONS`/`DIRECT_TO_METRICA_ATTRIBUTION`).
+  - [x] **Импорты после обрезки:** `import logging`, `import time`, `from datetime import datetime`, `from typing import Any, NoReturn`, `import requests`. (`datetime` нужен `_rate_limit`; `NoReturn` — `_handle_request_error`.)
+  - [x] **Method-docstring'и оставленных методов — НЕ переписывать** (английские, как в источнике) для сравнимости с оригиналом (project-context «вендоренное не причёсывать вразнобой»). Русский — только модульный docstring + шапка. _См. Dev Notes → «Язык docstring'ов в вендоренном коде»._
+- [x] **Task 3 — Подтвердить сохранность retry/rate-limit и путей ошибок (AC: #3, #5, #6)** — _реализации нового кода нет; задача — убедиться, что вендоренное поведение не сломано переносом, и покрыть тестами_
+  - [x] Убедиться, что `make_request` сохранил: цикл `range(_MAX_RETRIES)` с `_rate_limit()` на каждой попытке; retry с `time.sleep(_RETRY_DELAYS[attempt])` на статусах `{429,500,502,503}` пока `attempt < _MAX_RETRIES-1`; иначе/при не-ретраябельном статусе/при ошибке без `response` — немедленный `raise RuntimeError(error_detail)`.
+  - [x] **Зафиксировать (не баг, для тестов AC #5/#6) — асимметрия ретраев в источнике:** GET-методы (`get_*`, `evaluate_log_request`) идут через `make_request` → **ретраятся**. POST/download (`create_log_request`, `clean_log_request`, `download_log_request_part`) вызывают `session.post/get` напрямую и обрабатывают ошибку через `_handle_request_error` → **НЕ ретраятся**, сразу `RuntimeError`. Это вендоренное поведение — сохранить как есть (AC #3 «заново не реализуется»), не «выравнивать». _См. Dev Notes → «Retry/rate-limit»._
+  - [x] **AC #6 (не-ретраябельный HTTP без бессмысленных ретраев):** убедиться, что 401/403/404 (вне `_RETRYABLE_STATUS_CODES`) в `make_request` проваливаются мимо ветки retry сразу в `raise RuntimeError(error_detail)`; `error_detail` уже включает `str(e)` (несёт HTTP-статус, напр. «404 Client Error») + API-`message`/`errors` из тела. Этого достаточно для «классифицируется … с понятным сообщением». **Не добавлять** тяжёлой логики классификации — минимальное вендоренное поведение удовлетворяет AC (главное — «без бессмысленных ретраев»). _См. Dev Notes → «AC #6 — что именно требуется»._
+  - [x] **AC #5 (терминальный путь + connection-level):** убедиться, что (а) исчерпание ретраев на устойчивых 429/5xx даёт `RuntimeError` (не «голый» трейсбек, не зависание); (б) ошибка сетевого уровня (`requests.exceptions.ConnectionError`/`Timeout`, у которой `response is None` → `status_code is None` → не в retryable-наборе) даёт немедленный `RuntimeError`.
+- [x] **Task 4 — Offline-тесты `tests/test_metrica_client.py` (AC: #1, #2, #3, #5, #6)** — _см. Dev Notes → «Тестирование»_
+  - [x] `from __future__ import annotations`; без сети. Мокать `requests`-сессию через `unittest.mock` (stdlib): сконструировать клиент с фиктивными `token="t"`, `counter_id=42`, затем подменить `client.session` на `MagicMock`, настраивая `session.get/post.return_value` (mock-`Response` с `.json()`, `.raise_for_status()`, `.content`, `.status_code`) или `.side_effect` (список для retry).
+  - [x] **КРИТИЧНО — заглушить `time.sleep`:** `monkeypatch.setattr("scripts.utils.metrica_client.time.sleep", lambda *a, **k: None)` (autouse-fixture). Иначе retry-тесты реально спят 30/60с, а `_rate_limit` — до 1/30с. Без этого набор повиснет/будет медленным. _[ловушка: тесты ретраев «зависают»]_
+  - [x] Кейсы (минимум):
     - **Конструктор-шов (AC #1):** заголовок сессии = `Authorization: OAuth t`; `counter_id == 42`; токен НЕ хранится атрибутом (`"t" not in repr(client.__dict__)` / нет поля `token`). _NFR-5._
     - **Анти-зависимости (AC #1, #2) — НЕ голой подстрокой** (модульный docstring/комментарии содержат `AuthManager`/`polars` → ложный красный): распарсить `ast` модуля и проверить, что в `Import`/`ImportFrom`-узлах нет `auth_manager`, `polars`, `tapi_yandex*`, `logging_utils`, `config_manager`. (Аналог приёма из `tests/test_env_reader.py`.)
     - **Вырезанные методы (AC #2):** `not hasattr(MetricaClient, "get_report")`, `..."upload_offline_conversions"`, `..."get_search_queries_data")` и т.п.; оставленные — `hasattr` True для всех шести Logs API + трёх info.
@@ -89,28 +89,50 @@ so that иметь проверенный примитив доступа к Log
     - **Не-ретраябельный HTTP (AC #6):** 401 и 404 (HTTPError с `response.status_code`) → `RuntimeError` сразу, `session.get` вызван **1 раз** (нет бессмысленных ретраев), статус присутствует в тексте ошибки.
     - **Дневной лимит (AC #3):** выставить `client.requests_count_today = MAX_REQUESTS_PER_DAY` → `_rate_limit`/`make_request` → `RuntimeError` про дневной лимит.
     - **Ошибка в теле ответа:** `_check_response_errors` на `{"errors": [{"text": "..."}]}` → `RuntimeError("Metrica API error: ...")`.
-  - [ ] Завести `tests/fixtures/` (каталога ещё нет): мини-TSV `tests/fixtures/logs_visits_sample.tsv` — строка заголовка + 1–2 строки данных (для download-теста; project-context требует фикстуры на мини-TSV).
-- [ ] **Task 5 — Live-smoke `@pytest.mark.live` (AC: #4; project-context «тесты внешнего API → обязателен live-smoke»)**
-  - [ ] Маркер `@pytest.mark.live`; по умолчанию выключен (`addopts = "-m 'not live'"` — завести в `pyproject.toml`, если ещё нет; см. Dev Notes → «Маркер live»). Запуск явно: `uv run pytest -m live`.
-  - [ ] Тест дёргает **реальный** Logs API дешёвым info-методом: `creds = read_metrica_credentials()` (из 1.2) → `MetricaClient(token=creds.token, counter_id=creds.counter_id)` → `get_counter_info()` → assert вернулся `dict` с данными счётчика. **Один запрос** — уважает rate-limit (≤5000/day).
-  - [ ] **Нет кредов → `pytest.skip` с понятной причиной** (ловить `ValueError` от ридера ИЛИ проверять env заранее) — не ложный красный в CI/без `.env`.
-  - [ ] Документировать ручной прогон в Dev Notes/Completion Notes: `uv run pytest -m live` (нужны креды в `.env` хранилища). _AC #4: «в CI живой вызов мокается» (Task 4), «ручной прогон документирован» (тут)._
-- [ ] **Task 6 — mypy strict под `requests` (AC: качество/CI)** — _см. Dev Notes → «mypy и requests»_
-  - [ ] Прогнать `uv run mypy scripts`. `requests` НЕ несёт `py.typed` → под `strict` ожидается `import-untyped`.
-  - [ ] **Рекомендуемый фикс — добавить стабы:** `uv add --dev types-requests` (точные типы, без `Any`-дыр; обновлённый `uv.lock` — в тот же коммит, инвариант). Альтернатива (если стабы дают трения): override в `pyproject.toml`:
+  - [x] Завести `tests/fixtures/` (каталога ещё нет): мини-TSV `tests/fixtures/logs_visits_sample.tsv` — строка заголовка + 1–2 строки данных (для download-теста; project-context требует фикстуры на мини-TSV).
+- [x] **Task 5 — Live-smoke `@pytest.mark.live` (AC: #4; project-context «тесты внешнего API → обязателен live-smoke»)**
+  - [x] Маркер `@pytest.mark.live`; по умолчанию выключен (`addopts = "-m 'not live'"` — завести в `pyproject.toml`, если ещё нет; см. Dev Notes → «Маркер live»). Запуск явно: `uv run pytest -m live`.
+  - [x] Тест дёргает **реальный** Logs API дешёвым info-методом: `creds = read_metrica_credentials()` (из 1.2) → `MetricaClient(token=creds.token, counter_id=creds.counter_id)` → `get_counter_info()` → assert вернулся `dict` с данными счётчика. **Один запрос** — уважает rate-limit (≤5000/day).
+  - [x] **Нет кредов → `pytest.skip` с понятной причиной** (ловить `ValueError` от ридера ИЛИ проверять env заранее) — не ложный красный в CI/без `.env`.
+  - [x] Документировать ручной прогон в Dev Notes/Completion Notes: `uv run pytest -m live` (нужны креды в `.env` хранилища). _AC #4: «в CI живой вызов мокается» (Task 4), «ручной прогон документирован» (тут)._
+- [x] **Task 6 — mypy strict под `requests` (AC: качество/CI)** — _см. Dev Notes → «mypy и requests»_
+  - [x] Прогнать `uv run mypy scripts`. `requests` НЕ несёт `py.typed` → под `strict` ожидается `import-untyped`.
+  - [x] **Рекомендуемый фикс — добавить стабы:** `uv add --dev types-requests` (точные типы, без `Any`-дыр; обновлённый `uv.lock` — в тот же коммит, инвариант). Альтернатива (если стабы дают трения): override в `pyproject.toml`:
     ```toml
     [[tool.mypy.overrides]]
     module = ["requests", "requests.*"]
     ignore_missing_imports = true
     ```
     Сначала прогнать mypy и убедиться, что проблема реально есть; выбрать один путь. Все методы остаются полностью аннотированы (типы — из источника; `Any` только на границе `response.json()`, как в оригинале).
-- [ ] **Task 7 — Спека компонента `docs/metrica-client.md` (DoD, project-context)**
-  - [ ] Завести `docs/metrica-client.md` человеческим языком: **что делает** (создаёт/опрашивает/скачивает/чистит лог-запросы Logs API, плюс справочные info-методы), **зачем нужен** (единственная точка HTTP к Logs API; устойчивость к лимитам), **контракт с другими** (принимает готовые токен+счётчик инъекцией от компонента кредов 1.2; даёт жизненный цикл лог-запроса оркестратору 2.7 и CLI 1.6; rate-limit/retry внутри). Сослаться на `docs/creds.md` (откуда приходят креды).
-  - [ ] **Осознанное решение о гранулярности (как в 1.2 с `creds.md`):** карта компонентов project-context относит `metrica_client` к `ingestion.md` (приём = client + p81 + parquet_store + load_state). Но p81/parquet_store/load_state — это Epic 2; клиент — самостоятельный транспортный примитив, потребляемый оркестратором. По прецеденту `creds.md` (выделен Шефом как сквозной примитив) завожу **отдельную** `docs/metrica-client.md`. _Подтвердить у Шефа (вынесено в финальные вопросы); если предпочтёт `ingestion.md` — переименовать тривиально._
-- [ ] **Task 8 — Гейты верификации (обязательны перед закрытием)**
-  - [ ] `uv run mypy scripts` → зелёно (strict; модуль полностью типизирован).
-  - [ ] `uv run pytest` → зелёно (новые offline-тесты + смоук 1.1 + тесты 1.2; live по умолчанию пропущен через `-m 'not live'`).
-  - [ ] Прогнать чек-лист «Definition of Done» из Dev Notes.
+- [x] **Task 7 — Спека компонента `docs/metrica-client.md` (DoD, project-context)**
+  - [x] Завести `docs/metrica-client.md` человеческим языком: **что делает** (создаёт/опрашивает/скачивает/чистит лог-запросы Logs API, плюс справочные info-методы), **зачем нужен** (единственная точка HTTP к Logs API; устойчивость к лимитам), **контракт с другими** (принимает готовые токен+счётчик инъекцией от компонента кредов 1.2; даёт жизненный цикл лог-запроса оркестратору 2.7 и CLI 1.6; rate-limit/retry внутри). Сослаться на `docs/creds.md` (откуда приходят креды).
+  - [x] **Осознанное решение о гранулярности (как в 1.2 с `creds.md`):** карта компонентов project-context относит `metrica_client` к `ingestion.md` (приём = client + p81 + parquet_store + load_state). Но p81/parquet_store/load_state — это Epic 2; клиент — самостоятельный транспортный примитив, потребляемый оркестратором. По прецеденту `creds.md` (выделен Шефом как сквозной примитив) завожу **отдельную** `docs/metrica-client.md`. _Подтвердить у Шефа (вынесено в финальные вопросы); если предпочтёт `ingestion.md` — переименовать тривиально._
+- [x] **Task 8 — Гейты верификации (обязательны перед закрытием)**
+  - [x] `uv run mypy scripts` → зелёно (strict; модуль полностью типизирован).
+  - [x] `uv run pytest` → зелёно (новые offline-тесты + смоук 1.1 + тесты 1.2; live по умолчанию пропущен через `-m 'not live'`).
+  - [x] Прогнать чек-лист «Definition of Done» из Dev Notes.
+
+### Review Findings
+
+_Code review 2026-05-24 (adversarial: Blind Hunter + Edge Case Hunter + Acceptance Auditor). Итог: 1 decision-needed, 2 patch, 6 defer, 8 dismissed. Ни один AC материально не нарушен; `requests 2.34.2` несёт py.typed (mypy strict зелёный) — подтверждено аудитором._
+
+**Decision (разрешено 2026-05-24 → вариант 3, конвертировано в patch):**
+
+- [x] [Review][Patch] (из decision) Поднял `_MAX_RETRIES`→4: `_RETRY_DELAYS[2]=120` теперь реально срабатывает, docstring `make_request` «exponential backoff (30s, 60s, 120s)» соответствует поведению (1 первичная + 3 ретрая 30/60/120). `test_retry_exhausted_raises` обновлён (`[call(30), call(60), call(120)]`, `call_count == 4`). Stale-ссылка `_make_request`→`make_request` в docstring `_handle_request_error` исправлена. **Сознательное отклонение от вендора по решению Шефа — затрагивает NFR-3** (3 ретрая вместо 2; добавлен поясняющий комментарий у константы). [scripts/utils/metrica_client.py:101-108, 373; tests/test_metrica_client.py:287-300] _(найдено всеми тремя слоями)_
+
+**Patch:**
+
+- [x] [Review][Patch] Параметризовал retry-тест всеми ретраябельными кодами {429,500,502,503} (был только 503): `test_retry_retryable_then_success` — AC #3 [tests/test_metrica_client.py:272]
+- [x] [Review][Patch] Добавил 403 в `parametrize` теста `test_non_retryable_http_fails_once` (`[401, 403, 404]`) — docstring его заявлял [tests/test_metrica_client.py:311]
+
+**Defer (наследие вендора / усиление тестов — не блокирует):**
+
+- [x] [Review][Defer] `_check_response_errors` падает «голым» трейсбеком на нештатной форме `errors` (не-список либо элементы не-dict) вместо чистого RuntimeError [scripts/utils/metrica_client.py:97-99] — deferred, наследие вендора
+- [x] [Review][Defer] POST/download-путь (`create_log_request`/`clean_log_request`) не ловит `ValueError` от `response.json()` при 2xx с не-JSON телом → непойманный JSONDecodeError (GET-путь `make_request` его ловит — асимметрия); POST-путь ошибок (`_handle_request_error`) не покрыт тестом [scripts/utils/metrica_client.py:262, 336] — deferred, наследие вендора
+- [x] [Review][Defer] `get_log_requests` вернёт `None` (нарушив тип `list[dict]`), если ключ `requests` присутствует со значением `null` [scripts/utils/metrica_client.py:277] — deferred, наследие вендора
+- [x] [Review][Defer] `get_counters` падает (`None.get`) на `counter["site2"]=null` и молча отдаёт `[]` с INFO-логом при переименовании ключей API; live-тестом не покрыт (live дёргает только `get_counter_info`) [scripts/utils/metrica_client.py:204-217] — deferred, наследие вендора
+- [x] [Review][Defer] Расход дневной квоты при ретраях не покрыт тестом (`_rate_limit` замокан в retry-тестах): каждый ретрай инкрементит `requests_count_today`, шторм ретраев способен упереться в дневной лимит «посреди» цикла и подменить транзиентную 503 на quota-ошибку [tests/test_metrica_client.py:274] — deferred, усиление тестов
+- [x] [Review][Defer] `test_token_not_stored_in_attributes`: assert по `repr(c.__dict__)` тавтологичен для поля `session` (`Session.__repr__` не дампит заголовки) — реально проверяется лишь `not hasattr(c,"token")`; NFR-5 недо-покрыт (утечка через лог/кастомный `__repr__` не ловится) [tests/test_metrica_client.py:102-107] — deferred, усиление тестов
 
 ## Dev Notes
 
@@ -243,14 +265,37 @@ project-context требует docstring'и на русском, но также
 
 ### Agent Model Used
 
+claude-opus-4-7[1m] (Claude Opus 4.7, 1M context) — workflow `bmad-dev-story`.
+
 ### Debug Log References
+
+- `uv run pytest tests/test_metrica_client.py -q` → 37 passed.
+- `uv run pytest -q` → 58 passed, 1 deselected (live отсеян через `addopts="-m 'not live'"`).
+- `uv run pytest -m live --collect-only -q` → 1 collected, 58 deselected (маркер `live` подключён; реальный прогон не запускался — внешний API + креды).
+- `uv run mypy scripts` → Success, 9 source files.
 
 ### Completion Notes List
 
+- **Шов кредов развязан (AC #1):** конструктор `MetricaClient(token: str, counter_id: int)` принимает готовые креды инъекцией; `AuthManager` не вызывается и не импортируется; `env_reader` НЕ импортируется (креды инжектит вызывающая сторона — CLI 1.6). `del token` после установки заголовка — токен живёт только в сессии (NFR-5). Шапка `vendored from directaiq @ 7718bd65, seam: creds injected` в модульном docstring; `from __future__ import annotations` первой строкой кода.
+- **Обрезка (AC #2):** вырезаны Stat/Reporting (`get_report*`, `get_search_queries*`, `get_goals_detailed/_stats`, `_detect_table_prefix`), Direct (`get_direct_clients`, константы атрибуции), `upload_offline_conversions`, импорты `polars`/`auth_manager`/`logging_utils`. Логгер заменён на stdlib `logging.getLogger(__name__)`. `__all__ = ["MetricaClient"]`. Оставлены 6 методов жизненного цикла Logs API + 3 info-метода (`get_counter_info`/`get_counters`/`get_goals`). Поиск `polars`/`pl.` в коде — пусто (упоминания только в модульном docstring, тесты проверяют импорты через `ast`).
+- **Retry/rate-limit сохранены как есть (AC #3, #5, #6):** `_rate_limit`/`make_request`/`_handle_request_error` + константы перенесены без изменений. Асимметрия зафиксирована и покрыта тестами: GET-методы ретраятся через `make_request`; POST/download (`create`/`clean`/`download`) идут напрямую и НЕ ретраятся. Method-docstring'и оставленных методов не переписывались (английские, как в источнике) ради diff-сравнимости — осознанный вендоренный компромисс.
+- **mypy — решение (Task 6):** `requests` 2.34.2 несёт `py.typed` (нативно типизирован) → `import-untyped` не возникает, `mypy --strict` зелёный без стабов. `types-requests` НЕ добавлен (project-context: «зависимости без необходимости — нет»); `uv.lock` не менялся. Прецедент решения — [[feedback-decide-and-apply]].
+- **Спека (Task 7) — решение о гранулярности:** заведена ОТДЕЛЬНАЯ `docs/metrica-client.md` (а не раздел в `ingestion.md`) по прецеденту `creds.md`: клиент — самостоятельный транспортный примитив, потребляемый оркестратором Эпика 2. Решение принято автономно ([[feedback-decide-and-apply]]); вынесено на финальное подтверждение Шефу (тривиально переименовать, если предпочтёт `ingestion.md`).
+- **Live-smoke (AC #4):** `tests/test_metrica_client_live.py` (`@pytest.mark.live`) дёргает реальный `get_counter_info` через креды 1.2; нет кредов → `pytest.skip`. Ручной прогон: `uv run pytest -m live` (нужны креды в `.env` хранилища). В CI живой вызов мокается (offline-набор), live отсеян по умолчанию.
+
 ### File List
+
+- `scripts/utils/metrica_client.py` (новый) — вендоренный клиент Logs API с развязанным швом кредов.
+- `tests/test_metrica_client.py` (новый) — offline-тесты (37 кейсов).
+- `tests/test_metrica_client_live.py` (новый) — live-smoke `@pytest.mark.live`.
+- `tests/fixtures/logs_visits_sample.tsv` (новый) — мини-TSV фикстура для download-теста.
+- `docs/metrica-client.md` (новый) — человекочитаемая спека компонента.
+- `pyproject.toml` (изменён) — добавлен `[tool.pytest.ini_options]`: маркер `live` + `addopts="-m 'not live'"`.
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (изменён) — статус 1-3 → in-progress → review.
 
 ## Change Log
 
 | Дата | Изменение |
 |---|---|
 | 2026-05-24 | Создана story 1.3 (context engine): вендоринг `MetricaClient` из directaiq @ 7718bd65 с развязкой шва кредов (конструктор инъекцией), обрезкой reporting/Stat/Direct/polars/`upload_offline_conversions`, сохранением retry/rate-limit; offline-моки + live-smoke; спека `docs/metrica-client.md`. Статус → ready-for-dev. |
+| 2026-05-24 | Реализована story 1.3: создан `scripts/utils/metrica_client.py` (шов развязан, обрезка выполнена, retry/rate-limit сохранены); offline-тесты (37) + live-smoke; `docs/metrica-client.md`; pytest-конфиг (маркер `live`). mypy strict + pytest зелёные; `types-requests` не понадобился (requests несёт py.typed). Статус → review. |

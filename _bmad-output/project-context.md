@@ -119,7 +119,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 **Границы и каналы.**
 
 - Каналы агента: **CLI = действия / запись / жизненный цикл Logs API**; **MCP `duckdb_query` = только чтение / анализ**. Вывод обоих: `json|markdown|csv`.
-- Граница dev-репо ↔ per-game хранилище: код/каталог/справочники — в dev-репо (приходят симлинками); данные/`.env`/рабочая папка — в хранилище. Резолюция путей через `DATA_ROOT` + `paths.py`. **В dev-репо данные не пишутся.**
+- Граница dev-репо ↔ per-game хранилище: код/каталог/справочники — в dev-репо (приходят симлинками); данные/`.env`/рабочая папка — в хранилище. Резолюция путей через `GDAU_DATA_ROOT` + `paths.py`. **В dev-репо данные не пишутся.**
 - Вендоринг: модуль с шапкой `vendored from directaiq @ <ref>, seam: creds injected`; обрезать reporting/`polars`/Direct в клиенте; в MCP снять `config_manager`, goal-плейсхолдеры и НДС-семантику `_COST_COLUMN_SEMANTICS` (заменить семантикой из каталога).
 - **Не тащить инфру directaiq:** queue/worker, disk-guard, cron, `BaseScript`, `config_manager`.
 

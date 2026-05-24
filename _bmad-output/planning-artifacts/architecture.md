@@ -451,7 +451,7 @@ gamedev-analytics-unit/
 │   │   ├── views.py           [новое]  # DDL view'ов из каталога (TRY_CAST)
 │   │   ├── load_state.py      [новое]  # мета-таблица load_state + реконсиляция мета×факт
 │   │   ├── writer_lock.py     [новое]  # .writer.lock, fail-fast
-│   │   ├── paths.py                    # резолюция путей хранилища (env DATA_ROOT)
+│   │   ├── paths.py                    # резолюция путей хранилища (env GDAU_DATA_ROOT)
 │   │   ├── dates.py                    # clamp date2 «вчера по МСК», формат YYYY-MM-DD
 │   │   └── logging_utils.py            # stdlib logging
 │   ├── 8x_metrica_logs_api/
@@ -511,7 +511,7 @@ gamedev-analytics-unit/
 
 - **Внешний API:** единственная точка HTTP к Logs API — `scripts/utils/metrica_client.py`.
 - **Dev-репо ↔ хранилище:** код/каталог/справочники — в dev-репо (приходят симлинками); данные/`.env`/
-  рабочая папка — в хранилище. Резолюция через `DATA_ROOT` + `paths.py`. В dev-репо данные не пишутся.
+  рабочая папка — в хранилище. Резолюция через `GDAU_DATA_ROOT` + `paths.py`. В dev-репо данные не пишутся.
 - **Запись ↔ чтение:** запись (p81) — `.writer.lock` + атомарный Parquet + write-conn; чтение (MCP) —
   read-only, без лока. Каналы: CLI = действия/запись, MCP = чтение/анализ.
 - **Данные:** сырьё Parquet (источник истины, строки) ↔ working-view'ы (типизированы); контракт —

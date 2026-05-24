@@ -63,6 +63,10 @@ last_updated: 2026-05-24
 # story 2-1 in-progress → review (2026-05-24, dev-story: 6 AC закрыты; paths.py [5 чистых fail-loud резолверов, ноль mkdir] + database_manager.py [connection write/read-only, read-only до init → RuntimeError, finally-close]; docs/working-layer.md; offline 24 теста [13 paths + 11 db] + анти-зависимость через ast; гейты зелёные [mypy strict, pytest 182]; uv.lock не менялся; live неприменим)
 # story 2-1 review → done (2026-05-24, code-review: 6 AC ок + риски #1–#5 закрыты, гейты зелёные [mypy strict, pytest 184], 3 патча применены [is_absolute-гейт против записи в dev-репо + 2× обёртка сырого OSError → ValueError/RuntimeError; +2 регресс-теста], 0 defer, 12 dismiss)
 # story 2-2 backlog → ready-for-dev (2026-05-24, create-story: атомарная запись Parquet-партиции дня; parquet_store [новое, НЕ вендоринг]; Parquet пишется in-memory DuckDB БЕЗ pandas/polars/pyarrow [закреплено ast-тестом]; строки as-is VARCHAR + переименование колонок по каталогу 1.5; temp→os.replace в том же каталоге [Win-safe]; пустой день → пустая партиция со схемой; НЕ трогает gdau.duckdb/.writer.lock; docs/ingestion.md; live неприменим)
+# story 2-2 ready-for-dev → in-progress (2026-05-24, dev-story: реализация scripts/utils/parquet_store.py)
+# story 2-2 in-progress → review (2026-05-24, dev-story: 7 AC закрыты; parquet_store.write_partition [строки as-is + rename по каталогу, in-memory DuckDB БЕЗ pandas/polars, temp→os.replace, пустой день со схемой, fail-loud], docs/ingestion.md; offline 13 тестов [AC #1–#7 + гарды + ast-анти-зависимость]; live неприменим; гейты зелёные [mypy strict 14 файлов, pytest 197]; uv.lock не менялся)
+# story 2-2 review → done (2026-05-24, code-review: все 7 AC ок [Acceptance Auditor подтвердил риски №1–№7 + DoD], 4 патча применены [рантайм-гард типа ячейки str|None→ValueError / except (OSError,duckdb.Error)→RuntimeError на сбое DuckDB-кодировщика / +3 теста: DuckDB-сбой→RuntimeError, зачистка .tmp на фейле, усиленная идемпотентность AC#3], гейты зелёные [mypy strict 14, pytest 200], 1 defer [Windows os.replace под открытым читателем → 2.6/3.1], 7 dismiss; uv.lock не менялся)
+# story 2-3 backlog → ready-for-dev (2026-05-24, create-story: жёсткая сверка строк FR-13; выделенный чистый модуль row_check.py [stdlib only, БЕЗ импорта parquet_store/duckdb — создаётся параллельно ревью 2.2, нулевая сцепка по коду]; expected от сырого TSV [заголовок на каждую часть исключается — off-by-P-гард], actual от возврата write_partition 2.2; расхождение → RowCountMismatchError [жёсткий fail, НЕ warning]; 0==0/дубли — успех/без дедупа; гейтит load_state 2.4 исключением, сам мету не пишет; дополнение docs/ingestion.md; live неприменим)
 project: gamedev-analytics-unit
 project_key: NOKEY
 tracking_system: file-system
@@ -82,8 +86,8 @@ development_status:
   # Epic 2: Приём данных и безопасное обновление хранилища
   epic-2: in-progress
   2-1-соединение-duckdb-и-резолюция-путей-хранилища: done
-  2-2-атомарная-запись-parquet-партиции-дня: ready-for-dev
-  2-3-жёсткая-сверка-строк: backlog
+  2-2-атомарная-запись-parquet-партиции-дня: done
+  2-3-жёсткая-сверка-строк: ready-for-dev
   2-4-мета-таблица-load-state-реконсиляция-мета-факт: backlog
   2-5-лок-одного-писателя: backlog
   2-6-рабочий-слой-view-ы-из-каталога-с-try-cast: backlog

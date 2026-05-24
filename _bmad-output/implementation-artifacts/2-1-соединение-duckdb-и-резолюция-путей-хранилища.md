@@ -1,6 +1,6 @@
 # Story 2.1: Соединение DuckDB и резолюция путей хранилища
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -39,43 +39,43 @@ so that инструменты единообразно открывают БД 
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — `scripts/utils/paths.py`: чистые fail-loud резолверы путей хранилища (AC: #1, #5)**
-  - [ ] `from __future__ import annotations` первой строкой. Русский модульный docstring: роль (единственная точка резолюции путей per-game хранилища от `GDAU_DATA_ROOT`; чистые функции без side-effect; фундамент Epic 2/3/4). Импорты: stdlib `os`, `from pathlib import Path`; `from scripts.utils.env_reader import DATA_ROOT_ENV` (переиспользовать имя переменной — риск #2). `logger = logging.getLogger(__name__)` если логируешь (опционально — резолверы тихие). **Без** `dotenv`/`load_dotenv` (грузит env_reader, риск #2), **без** `sys.path`-хаков/`setup_paths` (entry points + hatchling уже резолвят импорты — 1.1), **без** fallback old/new-структур и **без** `mkdir` (риск #1).
-  - [ ] `get_storage_root() -> Path` — прочитать `os.environ.get(DATA_ROOT_ENV)`; пусто/None → `ValueError` (понятно: переменная не задана, подсказать про `gdau-init`/запуск из хранилища). `Path(value).resolve()`; **если не `.is_dir()` → `ValueError`** (корень не существует — AC #5). **Никакого `mkdir`.** Это закрывает «мусорную резолюцию»: при отсутствующем/битом корне падаем ДО любого построения путей, каталоги не создаются.
-  - [ ] `get_db_path() -> Path` → `get_storage_root() / "data" / "duckdb" / "gdau.duckdb"` (чистая резолюция, без mkdir).
-  - [ ] `get_raw_partition_path(source: str, date: str) -> Path` → `get_storage_root() / "data" / "raw" / source / f"{date}.parquet"`. `date` — уже отформатированная строка `YYYY-MM-DD` (форматирование/валидация дат — `dates.py` 1.4, здесь не дублировать). Рекомендуется валидировать `source ∈ {"visits","hits"}` fail-loud (переиспользовать `from scripts.utils.catalog import VALID_SOURCES`) — мусорный источник не должен молча резолвиться в путь.
-  - [ ] `get_raw_source_dir(source: str) -> Path` → `get_storage_root() / "data" / "raw" / source` — каталог источника (понадобится `views.py` 2.6 для glob `*.parquet`; тривиальный компаньон, заводим сейчас).
-  - [ ] `get_writer_lock_path() -> Path` → `get_storage_root() / ".writer.lock"`. **Только путь** — захват/освобождение лока это story 2.5, не здесь.
-  - [ ] `__all__` со списком публичных функций (как в `dates.py`/`catalog.py`).
-- [ ] **Task 2 — `scripts/utils/database_manager.py`: контекст-менеджер соединения (AC: #2, #3, #4, #6)**
-  - [ ] `from __future__ import annotations` первой строкой. Русский docstring: роль (единственная точка открытия встроенного DuckDB `gdau.duckdb`; write/read-only; гарантированное закрытие; ноль серверов FR-8). Явно отметить: **форма directaiq (`DatabaseManager.connection`) сохранена для узнаваемости, но это не построчный вендоринг** — вся инфра directaiq (миграции/UDF-макросы/таблицы Директа/`config_manager`/`activate.sh`) удалена (NFR-6, риск #3). Импорты: `contextlib`, `from collections.abc import Iterator`, `from pathlib import Path` (если нужен), `import duckdb`, `from scripts.utils.paths import get_db_path`. `logger = logging.getLogger(__name__)`.
-  - [ ] Класс `DatabaseManager` с `@staticmethod @contextlib.contextmanager def connection(read_only: bool = False) -> Iterator[duckdb.DuckDBPyConnection]:` (форма directaiq; см. Latest Tech про аннотацию генератора под mypy strict). **Без** `db_path`-параметра/`check_schema_version`/`register_udfs` — путь всегда из `paths.get_db_path()` (единый резолвер), миграций/UDF нет.
-  - [ ] Тело: `db_path = get_db_path()` (внутри — `get_storage_root()`, который fail-loud-ит при битом корне, AC #5 наследуется). Затем:
+- [x] **Task 1 — `scripts/utils/paths.py`: чистые fail-loud резолверы путей хранилища (AC: #1, #5)**
+  - [x] `from __future__ import annotations` первой строкой. Русский модульный docstring: роль (единственная точка резолюции путей per-game хранилища от `GDAU_DATA_ROOT`; чистые функции без side-effect; фундамент Epic 2/3/4). Импорты: stdlib `os`, `from pathlib import Path`; `from scripts.utils.env_reader import DATA_ROOT_ENV` (переиспользовать имя переменной — риск #2). `logger = logging.getLogger(__name__)` если логируешь (опционально — резолверы тихие). **Без** `dotenv`/`load_dotenv` (грузит env_reader, риск #2), **без** `sys.path`-хаков/`setup_paths` (entry points + hatchling уже резолвят импорты — 1.1), **без** fallback old/new-структур и **без** `mkdir` (риск #1).
+  - [x] `get_storage_root() -> Path` — прочитать `os.environ.get(DATA_ROOT_ENV)`; пусто/None → `ValueError` (понятно: переменная не задана, подсказать про `gdau-init`/запуск из хранилища). `Path(value).resolve()`; **если не `.is_dir()` → `ValueError`** (корень не существует — AC #5). **Никакого `mkdir`.** Это закрывает «мусорную резолюцию»: при отсутствующем/битом корне падаем ДО любого построения путей, каталоги не создаются.
+  - [x] `get_db_path() -> Path` → `get_storage_root() / "data" / "duckdb" / "gdau.duckdb"` (чистая резолюция, без mkdir).
+  - [x] `get_raw_partition_path(source: str, date: str) -> Path` → `get_storage_root() / "data" / "raw" / source / f"{date}.parquet"`. `date` — уже отформатированная строка `YYYY-MM-DD` (форматирование/валидация дат — `dates.py` 1.4, здесь не дублировать). Рекомендуется валидировать `source ∈ {"visits","hits"}` fail-loud (переиспользовать `from scripts.utils.catalog import VALID_SOURCES`) — мусорный источник не должен молча резолвиться в путь.
+  - [x] `get_raw_source_dir(source: str) -> Path` → `get_storage_root() / "data" / "raw" / source` — каталог источника (понадобится `views.py` 2.6 для glob `*.parquet`; тривиальный компаньон, заводим сейчас).
+  - [x] `get_writer_lock_path() -> Path` → `get_storage_root() / ".writer.lock"`. **Только путь** — захват/освобождение лока это story 2.5, не здесь.
+  - [x] `__all__` со списком публичных функций (как в `dates.py`/`catalog.py`).
+- [x] **Task 2 — `scripts/utils/database_manager.py`: контекст-менеджер соединения (AC: #2, #3, #4, #6)**
+  - [x] `from __future__ import annotations` первой строкой. Русский docstring: роль (единственная точка открытия встроенного DuckDB `gdau.duckdb`; write/read-only; гарантированное закрытие; ноль серверов FR-8). Явно отметить: **форма directaiq (`DatabaseManager.connection`) сохранена для узнаваемости, но это не построчный вендоринг** — вся инфра directaiq (миграции/UDF-макросы/таблицы Директа/`config_manager`/`activate.sh`) удалена (NFR-6, риск #3). Импорты: `contextlib`, `from collections.abc import Iterator`, `from pathlib import Path` (если нужен), `import duckdb`, `from scripts.utils.paths import get_db_path`. `logger = logging.getLogger(__name__)`.
+  - [x] Класс `DatabaseManager` с `@staticmethod @contextlib.contextmanager def connection(read_only: bool = False) -> Iterator[duckdb.DuckDBPyConnection]:` (форма directaiq; см. Latest Tech про аннотацию генератора под mypy strict). **Без** `db_path`-параметра/`check_schema_version`/`register_udfs` — путь всегда из `paths.get_db_path()` (единый резолвер), миграций/UDF нет.
+  - [x] Тело: `db_path = get_db_path()` (внутри — `get_storage_root()`, который fail-loud-ит при битом корне, AC #5 наследуется). Затем:
     - **read-only-гейт (AC #6):** `if read_only and not db_path.exists(): raise RuntimeError(f"БД не инициализирована: {db_path} — запусти gdau-init или gdau-logs update")` — до `duckdb.connect`, чтобы не выпускать «голый» IOException движка (риск #4).
     - **write-режим создаёт родителя (AC #2, риск #5):** `if not read_only: db_path.parent.mkdir(parents=True, exist_ok=True)` (внутри провалидированного корня хранилища — не dev-репо).
     - открыть: `conn = duckdb.connect(str(db_path), read_only=read_only)` (файловый embedded — AC #3, ноль серверов). Обернуть открытие в `try/except duckdb.Error as exc: raise RuntimeError(...) from exc` — чтобы и неожиданные ошибки connect выходили понятным сообщением, не сырым трейсбеком.
     - `yield conn` внутри `try`; в `finally` — `with contextlib.suppress(Exception): conn.close()` (AC #4: гарантированное закрытие даже при исключении в теле `with`; suppress на close — закрытие уже-битого хэндла не должно маскировать исходную ошибку).
-  - [ ] **НЕ заводить** `load_state`/`table_metadata`/любые таблицы и DDL — схема это 2.4/2.6/init (4.3). `database_manager` только открывает соединение, не знает про объекты БД.
-- [ ] **Task 3 — Спека компонента `docs/working-layer.md` (часть DoD)**
-  - [ ] Завести `docs/working-layer.md` человеческим языком (project-context: `working-layer.md` — логический компонент «рабочий слой: view'ы + database_manager + типизация»; `paths` — мелкий хелпер, документируется внутри родственной спеки). Сейчас компонент описывает **фундамент**: резолюцию путей хранилища + открытие БД. Три вопроса простыми словами: **(1) Что делает** — по корню рабочего пространства игры (`GDAU_DATA_ROOT`) знает, где лежат сырьё (`data/raw/{источник}/{дата}.parquet`), сама база (`data/duckdb/gdau.duckdb`) и файл-замок записи (`.writer.lock`); и умеет открыть базу на запись или только-чтение, гарантированно закрывая её после; **(2) Зачем** — чтобы все инструменты единообразно находили рабочее пространство и открывали одну и ту же базу, при нулевом серверном процессе (просто файлы — копируется между Windows и Linux); **(3) Контракт** — вход: переменная окружения с корнем хранилища; выход: пути и открытое соединение; обещания: нет корня/корня нет на диске → сразу понятная остановка (ничего не создаёт «мимо»), чтение несуществующей базы → понятное «база не готова» (а не сырая ошибка движка), база всегда закрывается. **Явно отметить границы:** типизированные представления (`view'ы`) и парсинг типов — story 2.6 (этот файл дополнится); захват `.writer.lock` — 2.5; запись партиций — 2.2; мета-таблица — 2.4. Без сигнатур кода.
-- [ ] **Task 4 — Offline-тесты (AC: #1–#6)**
-  - [ ] `from __future__ import annotations`; зеркалит `scripts/` → `tests/test_paths.py` + `tests/test_database_manager.py`. Кросс-платформенно: только `tmp_path`/`pathlib`, без хардкода разделителей/абсолютных путей (CI гоняет ubuntu + windows). Без сети (модули сетей не знают). **`monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path))`** задаёт корень хранилища; `monkeypatch.delenv(..., raising=False)` — снимает.
-  - [ ] **`test_paths.py`:**
+  - [x] **НЕ заводить** `load_state`/`table_metadata`/любые таблицы и DDL — схема это 2.4/2.6/init (4.3). `database_manager` только открывает соединение, не знает про объекты БД.
+- [x] **Task 3 — Спека компонента `docs/working-layer.md` (часть DoD)**
+  - [x] Завести `docs/working-layer.md` человеческим языком (project-context: `working-layer.md` — логический компонент «рабочий слой: view'ы + database_manager + типизация»; `paths` — мелкий хелпер, документируется внутри родственной спеки). Сейчас компонент описывает **фундамент**: резолюцию путей хранилища + открытие БД. Три вопроса простыми словами: **(1) Что делает** — по корню рабочего пространства игры (`GDAU_DATA_ROOT`) знает, где лежат сырьё (`data/raw/{источник}/{дата}.parquet`), сама база (`data/duckdb/gdau.duckdb`) и файл-замок записи (`.writer.lock`); и умеет открыть базу на запись или только-чтение, гарантированно закрывая её после; **(2) Зачем** — чтобы все инструменты единообразно находили рабочее пространство и открывали одну и ту же базу, при нулевом серверном процессе (просто файлы — копируется между Windows и Linux); **(3) Контракт** — вход: переменная окружения с корнем хранилища; выход: пути и открытое соединение; обещания: нет корня/корня нет на диске → сразу понятная остановка (ничего не создаёт «мимо»), чтение несуществующей базы → понятное «база не готова» (а не сырая ошибка движка), база всегда закрывается. **Явно отметить границы:** типизированные представления (`view'ы`) и парсинг типов — story 2.6 (этот файл дополнится); захват `.writer.lock` — 2.5; запись партиций — 2.2; мета-таблица — 2.4. Без сигнатур кода.
+- [x] **Task 4 — Offline-тесты (AC: #1–#6)**
+  - [x] `from __future__ import annotations`; зеркалит `scripts/` → `tests/test_paths.py` + `tests/test_database_manager.py`. Кросс-платформенно: только `tmp_path`/`pathlib`, без хардкода разделителей/абсолютных путей (CI гоняет ubuntu + windows). Без сети (модули сетей не знают). **`monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path))`** задаёт корень хранилища; `monkeypatch.delenv(..., raising=False)` — снимает.
+  - [x] **`test_paths.py`:**
     - **AC #1:** при `GDAU_DATA_ROOT=tmp_path` — `get_db_path() == tmp_path/"data"/"duckdb"/"gdau.duckdb"`; `get_raw_partition_path("visits","2026-05-20") == tmp_path/"data"/"raw"/"visits"/"2026-05-20.parquet"`; `get_writer_lock_path() == tmp_path/".writer.lock"`; `get_raw_source_dir("hits")` корректен. Сравнивать через `Path`-равенство (не строки), чтобы тест прошёл на обеих ОС.
     - **AC #5 (не задан):** `monkeypatch.delenv(DATA_ROOT_ENV)` → `pytest.raises(ValueError)` на `get_storage_root()`/`get_db_path()`; **и проверить, что ни один каталог не создан** (напр. `data/` в репо/cwd не появился — assert на отсутствие side-effect).
     - **AC #5 (несуществующий):** `GDAU_DATA_ROOT = tmp_path/"nope"` (не создавать) → `ValueError`; каталог `nope` после вызова **не существует** (резолвер ничего не mkdir-ит).
     - (опц., если ввёл валидацию источника) `get_raw_partition_path("sessions", ...)` → `ValueError`.
-  - [ ] **`test_database_manager.py`:**
+  - [x] **`test_database_manager.py`:**
     - **AC #2/#3 (write создаёт и работает):** `GDAU_DATA_ROOT=tmp_path`; `with DatabaseManager.connection() as conn: conn.execute("CREATE TABLE t(x INTEGER); INSERT INTO t VALUES (1)")` или `SELECT 1`; после — `get_db_path().is_file()` True (реальный файл на диске = embedded, ноль серверов).
     - **AC #2 (read-only читает записанное):** сначала write создаёт/пишет, затем `with DatabaseManager.connection(read_only=True) as conn: conn.execute("SELECT ...").fetchall()` отдаёт данные.
     - **AC #4 (закрытие/нет утечки):** сохранить ссылку на `conn` из `with`; после выхода — `pytest.raises(Exception)` (`duckdb`-ошибка соединения) на `conn.execute("SELECT 1")` → доказывает, что закрыт. Плюс: открыть write, закрыть, затем снова открыть write/read-only **успешно** — отсутствие висящего эксклюзивного лока DuckDB подтверждает чистое закрытие (Windows особенно чувствителен).
     - **AC #6 (read-only до init):** `GDAU_DATA_ROOT=tmp_path` (корень есть), `gdau.duckdb` **нет** → `pytest.raises(RuntimeError)` с сообщением про «не инициализирована» (а не сырой `duckdb.IOException`); файл БД после так и **не создан** (read-only не создаёт).
-  - [ ] **Анти-зависимость (через `ast`, не подстроку — docstring/комментарии содержат `directaiq`/`config_manager`/`pandas`):** распарсить `ast` обоих модулей, проверить отсутствие `Import`/`ImportFrom` (top-level имя `name.split(".")[0]`) на `pandas`/`polars`/`numpy` и на directaiq-инфру `config_manager`/`base_script`/`auth_manager`; для `database_manager` дополнительно убедиться, что нет узлов-ссылок на `register_udfs`/`schema_migrations`/`migrations` (вырезанная инфра, риск #3). Приём — из `tests/test_catalog.py`/`test_logs_api_cli.py`.
-  - [ ] **Live-тест НЕ нужен** (и не заводить): 2.1 не ходит в сеть, DuckDB локален. Правило opt-in live ([[realapi-smoke-tests]]) применяется только к компонентам **внешнего API** (Logs API). Зафиксировать это в Dev Agent Record, чтобы отсутствие live-набора не сочли упущением.
-- [ ] **Task 5 — Гейты верификации (обязательны перед закрытием)**
-  - [ ] `uv run mypy scripts` → зелено (strict; полная типизация; генератор `connection` аннотирован `Iterator[duckdb.DuckDBPyConnection]`). Новых зависимостей нет (`duckdb` уже пин `>=1.5,<1.6`) → **`uv.lock` не меняется**.
-  - [ ] `uv run pytest` → зелено (новый offline-набор + регрессия 1.1–1.6; live отсеян `addopts="-m 'not live'"`).
-  - [ ] Прогнать чек-лист «Definition of Done» из Dev Notes.
+  - [x] **Анти-зависимость (через `ast`, не подстроку — docstring/комментарии содержат `directaiq`/`config_manager`/`pandas`):** распарсить `ast` обоих модулей, проверить отсутствие `Import`/`ImportFrom` (top-level имя `name.split(".")[0]`) на `pandas`/`polars`/`numpy` и на directaiq-инфру `config_manager`/`base_script`/`auth_manager`; для `database_manager` дополнительно убедиться, что нет узлов-ссылок на `register_udfs`/`schema_migrations`/`migrations` (вырезанная инфра, риск #3). Приём — из `tests/test_catalog.py`/`test_logs_api_cli.py`.
+  - [x] **Live-тест НЕ нужен** (и не заводить): 2.1 не ходит в сеть, DuckDB локален. Правило opt-in live ([[realapi-smoke-tests]]) применяется только к компонентам **внешнего API** (Logs API). Зафиксировать это в Dev Agent Record, чтобы отсутствие live-набора не сочли упущением.
+- [x] **Task 5 — Гейты верификации (обязательны перед закрытием)**
+  - [x] `uv run mypy scripts` → зелено (strict; полная типизация; генератор `connection` аннотирован `Iterator[duckdb.DuckDBPyConnection]`). Новых зависимостей нет (`duckdb` уже пин `>=1.5,<1.6`) → **`uv.lock` не меняется**.
+  - [x] `uv run pytest` → зелено (новый offline-набор + регрессия 1.1–1.6; live отсеян `addopts="-m 'not live'"`).
+  - [x] Прогнать чек-лист «Definition of Done» из Dev Notes.
 
 ## Dev Notes
 
@@ -188,8 +188,69 @@ so that инструменты единообразно открывают БД 
 
 ### Agent Model Used
 
+claude-opus-4-7[1m] (Amelia, dev-story workflow)
+
 ### Debug Log References
+
+- `uv run pytest tests/test_paths.py` → 13 passed
+- `uv run pytest tests/test_database_manager.py` → 11 passed
+- `uv run mypy scripts` → Success: no issues found in 13 source files
+- `uv run pytest` (полный offline) → 182 passed, 3 deselected (live отсеян `-m 'not live'`)
 
 ### Completion Notes List
 
+- **`scripts/utils/paths.py`** — пять публичных резолверов (`get_storage_root`,
+  `get_db_path`, `get_raw_partition_path`, `get_raw_source_dir`, `get_writer_lock_path`),
+  все чистые, **ноль `mkdir`/side-effect**. `get_storage_root` fail-loud-ит (`ValueError`)
+  при не заданном/пустом/несуществующем корне и при указании на файл (`is_dir`-гейт).
+  Имя переменной переиспользовано из `env_reader.DATA_ROOT_ENV` (не второй литерал, риск #2).
+  `get_raw_partition_path`/`get_raw_source_dir` валидируют `source ∈ {visits,hits}` через
+  `catalog.VALID_SOURCES`. Модуль `.env` **не грузит** (это зона env_reader) — закреплено
+  тестом анти-зависимости (нет `dotenv` среди import-узлов). (AC #1, #5)
+- **`scripts/utils/database_manager.py`** — один класс с единственным методом
+  `connection(read_only=False)` (`@staticmethod @contextmanager`, генератор аннотирован
+  `Iterator[duckdb.DuckDBPyConnection]` под mypy strict). Путь из `paths.get_db_path()`.
+  read-only-гейт `if read_only and not db_path.exists()` → `RuntimeError("БД не
+  инициализирована…")` ДО `duckdb.connect` (AC #6, не сырой `IOException` — закреплено
+  отдельным тестом `not isinstance(exc, duckdb.Error)`). write-режим создаёт родителя
+  `data/duckdb/` (AC #2). `finally`-закрытие под `contextlib.suppress(Exception)` (AC #4).
+  Ошибка `connect` оборачивается в `RuntimeError`. Вся инфра directaiq (миграции/UDF/
+  `REQUIRED_TABLES`/`TABLE_METADATA_DDL`/`config_manager`/`activate.sh`) **вырезана** —
+  закреплено AST-тестом (нет import-узлов инфры и нет ссылок-имён на `register_udfs`/
+  `schema_migrations`/`migrations`/`REQUIRED_TABLES`/`TABLE_METADATA_DDL`). (AC #2, #3, #4, #6)
+- **`docs/working-layer.md`** заведён (DoD): три вопроса простыми словами + явные границы
+  2.2/2.3/2.4/2.5/2.6; помечено, что типизация view'ов дополнит файл в 2.6.
+- **Live-набор осознанно отсутствует:** 2.1 не ходит в сеть, DuckDB локален. Правило
+  opt-in live ([[realapi-smoke-tests]]) применяется только к внешнему API (Logs API);
+  здесь неприменимо — это не упущение.
+- **Гейты:** mypy strict и pytest зелёные; `uv.lock` **не менялся** (новых зависимостей
+  нет — stdlib + уже пинятый `duckdb`); `data/`-артефактов в dev-репо не создано.
+- **Цикла импортов нет:** `paths` → `env_reader`/`catalog`; `database_manager` → `paths`;
+  `env_reader`/`catalog` обратно не импортируют. Подтверждено зелёным mypy/pytest.
+
 ### File List
+
+- `scripts/utils/paths.py` (новый)
+- `scripts/utils/database_manager.py` (новый)
+- `tests/test_paths.py` (новый)
+- `tests/test_database_manager.py` (новый)
+- `docs/working-layer.md` (новый)
+- `_bmad-output/implementation-artifacts/2-1-соединение-duckdb-и-резолюция-путей-хранилища.md` (статус/записи)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (статус истории)
+
+## Change Log
+
+| Дата | Изменение |
+|---|---|
+| 2026-05-24 | Реализованы `paths.py` (5 чистых fail-loud резолверов) и `database_manager.py` (контекст-менеджер соединения DuckDB write/read-only с гарантированным закрытием); offline-набор из 24 тестов (AC #1–#6 + анти-зависимость); спека `docs/working-layer.md`. Гейты зелёные (mypy strict, pytest 182), `uv.lock` не менялся. Статус → review. |
+
+### Review Findings
+
+_Адверсариальное код-ревью (Blind Hunter + Edge Case Hunter + Acceptance Auditor), 2026-05-24._
+_Acceptance Auditor: все 6 AC и риски вендоринга #1–#5 закрыты, гейты воспроизведены (mypy ok, pytest 182/24) — **нарушений критериев приёмки нет**. Ниже — находки слоёв Blind/Edge сверх AC (контракт fail-loud / инвариант хранилища)._
+
+- [x] [Review][Patch] Относительный `GDAU_DATA_ROOT` молча резолвится против cwd → данные могут осесть в dev-репо [scripts/utils/paths.py:67] — `get_storage_root` делает `Path(value).resolve()` без `is_absolute()`. Относительное значение (напр. `GDAU_DATA_ROOT=data`) при запуске из dev-репо разрешится в `<dev-репо>/data`; при существующем каталоге `is_dir()` пройдёт молча и БД создастся ВНУТРИ dev-репо (нарушение инварианта «в dev-репо данные не пишутся»). **Решение Шефа:** добавить fail-loud `is_absolute()`-гейт ДО `resolve()` (отвергать относительный корень).
+- [x] [Review][Patch] Необёрнутый `OSError` от `mkdir` в write-режиме [scripts/utils/database_manager.py:72] — `db_path.parent.mkdir(...)` стоит вне `try`; если на месте `data/`/`data/duckdb/` лежит файл или нет прав записи, сырой `OSError`/`NotADirectoryError` улетает мимо контракта модуля «на ошибку открытия — RuntimeError с контекстом, а не сырой трейсбек движка» (docstring строки 57–59). Обернуть `mkdir` в `try/except OSError → RuntimeError`.
+- [x] [Review][Patch] Необёрнутый `OSError` в `get_storage_root` [scripts/utils/paths.py:67-68] — `.resolve()`/`.is_dir()` при отказе прав, симлинк-петле или слишком длинном пути могут бросить сырой `OSError`/`PermissionError` мимо заявленного fail-loud `ValueError` (docstring «битый корень → ValueError»). Обернуть в `try/except OSError → ValueError`.
+
+**Итог ревью:** все 3 патча применены; добавлено 2 регресс-теста (относительный корень → `ValueError` без side-effect; сбой `mkdir` → `RuntimeError`). Гейты зелёные: `uv run mypy scripts` ok, `uv run pytest` → **184 passed, 3 deselected**. `uv.lock` не менялся.

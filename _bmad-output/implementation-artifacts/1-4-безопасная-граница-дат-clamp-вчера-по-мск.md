@@ -1,6 +1,6 @@
 # Story 1.4: Безопасная граница дат — clamp «вчера по МСК»
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -31,21 +31,21 @@ so that не нарушать `date2 < today` Logs API и не тянуть не
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Создать `scripts/utils/dates.py` со stdlib-таймзоной МСК (AC: #4)**
-  - [ ] `from __future__ import annotations` первой строкой кода (инвариант проекта — так в каждом модуле).
-  - [ ] Модульный docstring **на русском**: роль модуля (единственное место правила «`date2` ≤ вчера по МСК» + строгий формат `YYYY-MM-DD` для Logs API; потребители — CLI 1.6, p81 2.7, hot-window 2.8). Идентификаторы — английские.
-  - [ ] `import logging` + `logger = logging.getLogger(__name__)` (как в `env_reader.py`; project-context «только stdlib logging»).
-  - [ ] **Константа `MSK = timezone(timedelta(hours=3))`** — фиксированный офсет, НЕ `zoneinfo`/`pytz`. Комментарий «почему» прямо у константы: Москва постоянно UTC+3 (без DST с 2014), `zoneinfo("Europe/Moscow")` требует `tzdata` на Windows → фикс-офсет ноль-зависимостей и кросс-платформенно. _[anti-pattern: zoneinfo/pytz тянут зависимость/ломаются на Windows]_
-  - [ ] Импорты: `from datetime import date, datetime, timedelta, timezone`, `import logging`, `import re` (для guard формата). Без сторонних импортов.
-- [ ] **Task 2 — Шов времени и «сегодня/вчера по МСК» (AC: #4)**
-  - [ ] `def _now_utc() -> datetime: return datetime.now(timezone.utc)` — **единственный шов к стене часов** (тесты его монкейпатчат фиксированным aware-UTC инстантом). Внутренний (нижнее подчёркивание).
-  - [ ] `def moscow_today() -> date: return _now_utc().astimezone(MSK).date()` — сегодня по МСК. Независимо от локальной зоны машины (инстант берётся в UTC, переводится в МСК). _AC #4._
-  - [ ] `def moscow_yesterday() -> date: return moscow_today() - timedelta(days=1)` — потолок clamp и **якорь hot-window** (потребляется 2.8). Публичная.
-- [ ] **Task 3 — Строгий парсинг и форматирование `YYYY-MM-DD` (AC: #3, #6)**
-  - [ ] `def parse_date(value: str) -> date`: **guard каноничного вида** `re.fullmatch(r"\d{4}-\d{2}-\d{2}", value.strip())` → иначе `raise ValueError`; затем `date.fromisoformat(...)`. Guard обязателен: голый `fromisoformat` в 3.11+ принимает basic-формат `20260524` и week-даты — это не «строго YYYY-MM-DD» (AC #3). Сообщение об ошибке содержит сам некорректный ввод (`{value!r}`) — даты не секрет, помогает диагностике. _[edge-case: мусорная дата → ValueError, НЕ падение в clamp]_
-  - [ ] `def format_date(value: date) -> str: return value.isoformat()` — для `date` всегда даёт `YYYY-MM-DD` (zero-padded). _AC #3._
-- [ ] **Task 4 — Ядро: clamp + валидация диапазона (AC: #1, #2, #5)**
-  - [ ] `def clamp_date_range(date1: date, date2: date, *, today_msk: date | None = None) -> tuple[date, date]`:
+- [x] **Task 1 — Создать `scripts/utils/dates.py` со stdlib-таймзоной МСК (AC: #4)**
+  - [x] `from __future__ import annotations` первой строкой кода (инвариант проекта — так в каждом модуле).
+  - [x] Модульный docstring **на русском**: роль модуля (единственное место правила «`date2` ≤ вчера по МСК» + строгий формат `YYYY-MM-DD` для Logs API; потребители — CLI 1.6, p81 2.7, hot-window 2.8). Идентификаторы — английские.
+  - [x] `import logging` + `logger = logging.getLogger(__name__)` (как в `env_reader.py`; project-context «только stdlib logging»).
+  - [x] **Константа `MSK = timezone(timedelta(hours=3))`** — фиксированный офсет, НЕ `zoneinfo`/`pytz`. Комментарий «почему» прямо у константы: Москва постоянно UTC+3 (без DST с 2014), `zoneinfo("Europe/Moscow")` требует `tzdata` на Windows → фикс-офсет ноль-зависимостей и кросс-платформенно. _[anti-pattern: zoneinfo/pytz тянут зависимость/ломаются на Windows]_
+  - [x] Импорты: `from datetime import date, datetime, timedelta, timezone`, `import logging`, `import re` (для guard формата). Без сторонних импортов.
+- [x] **Task 2 — Шов времени и «сегодня/вчера по МСК» (AC: #4)**
+  - [x] `def _now_utc() -> datetime: return datetime.now(timezone.utc)` — **единственный шов к стене часов** (тесты его монкейпатчат фиксированным aware-UTC инстантом). Внутренний (нижнее подчёркивание).
+  - [x] `def moscow_today() -> date: return _now_utc().astimezone(MSK).date()` — сегодня по МСК. Независимо от локальной зоны машины (инстант берётся в UTC, переводится в МСК). _AC #4._
+  - [x] `def moscow_yesterday() -> date: return moscow_today() - timedelta(days=1)` — потолок clamp и **якорь hot-window** (потребляется 2.8). Публичная.
+- [x] **Task 3 — Строгий парсинг и форматирование `YYYY-MM-DD` (AC: #3, #6)**
+  - [x] `def parse_date(value: str) -> date`: **guard каноничного вида** `re.fullmatch(r"\d{4}-\d{2}-\d{2}", value.strip())` → иначе `raise ValueError`; затем `date.fromisoformat(...)`. Guard обязателен: голый `fromisoformat` в 3.11+ принимает basic-формат `20260524` и week-даты — это не «строго YYYY-MM-DD» (AC #3). Сообщение об ошибке содержит сам некорректный ввод (`{value!r}`) — даты не секрет, помогает диагностике. _[edge-case: мусорная дата → ValueError, НЕ падение в clamp]_
+  - [x] `def format_date(value: date) -> str: return value.isoformat()` — для `date` всегда даёт `YYYY-MM-DD` (zero-padded). _AC #3._
+- [x] **Task 4 — Ядро: clamp + валидация диапазона (AC: #1, #2, #5)**
+  - [x] `def clamp_date_range(date1: date, date2: date, *, today_msk: date | None = None) -> tuple[date, date]`:
     ```python
     ceiling = (today_msk if today_msk is not None else moscow_today()) - timedelta(days=1)
     clamped2 = date2
@@ -59,26 +59,26 @@ so that не нарушать `date2 < today` Logs API и не тянуть не
         )
     return date1, clamped2
     ```
-  - [ ] **Параметр `today_msk` (keyword-only, default `None`)** — инъекция «сегодня» для детерминированных тестов; в проде не передаётся (берётся `moscow_today()`). _Не_ городить отдельный «мокабельный» класс — одного kwarg достаточно.
-  - [ ] **AC #1:** `date2` сегодня/будущее (> ceiling) → лог INFO + `clamped2 = ceiling`, без исключения.
-  - [ ] **AC #2:** `date2 ≤ ceiling` (в т.ч. ровно `== ceiling`) → не меняется, лог не пишется (нет off-by-one на границе).
-  - [ ] **AC #5 (единственная проверка `date1 > clamped2` ловит оба кейса):** будущий `date1` (> ceiling ≥ clamped2) и инвертированный диапазон (`date1 > date2`, обе в прошлом, clamp не сработал) → `ValueError`. Функция чистая — `raise` происходит ДО возврата, т.е. до любого сетевого вызова у потребителя. **Осознанное отличие от directaiq:** там `start>safe_end` → тихий «успех, 0 файлов»; у нас — fail-loud.
-  - [ ] `__all__ = ["MSK", "moscow_today", "moscow_yesterday", "parse_date", "format_date", "clamp_date_range"]`.
-- [ ] **Task 5 — Offline-тесты `tests/test_dates.py` (AC: #1–#6)** — _см. Dev Notes → «Тестирование»_
-  - [ ] `from __future__ import annotations`; без сети. Детерминизм: в clamp-тестах **всегда передавать `today_msk=date(...)`** (не зависеть от стены часов).
-  - [ ] **AC #4 (МСК, не локальная зона) — через шов `_now_utc`:** `monkeypatch.setattr("scripts.utils.dates._now_utc", lambda: datetime(2026, 5, 24, 22, 30, tzinfo=timezone.utc))`. В UTC дата = 24-е, в МСК (=01:30 25-го) → `moscow_today() == date(2026,5,25)`, `moscow_yesterday() == date(2026,5,24)`. Доказывает, что используется МСК, а не UTC/локальная. (Симметрично можно проверить инстант, где МСК-дата < следующего UTC-дня — необязательно.)
-  - [ ] **AC #1:** `clamp_date_range(date(2026,5,1), date(2026,5,25), today_msk=date(2026,5,25))` → `date2 == date(2026,5,24)`; `caplog` содержит INFO про clamp.
-  - [ ] **AC #1 (будущее):** `date2 = date(2030,1,1)` → клампится к вчера; без исключения.
-  - [ ] **AC #2:** `date2 == ceiling` (== вчера) → не меняется, лог пуст; `date2 < ceiling` → не меняется. _Граница без off-by-one._
-  - [ ] **AC #3:** `format_date(date(2026,5,1)) == "2026-05-01"` (zero-pad); `parse_date("2026-05-01") == date(2026,5,1)`; round-trip.
-  - [ ] **AC #5:** будущий `date1` (`date1=date(2030,1,1)`, любой `date2`) → `ValueError` (match «инвертирован|пустой»); инвертированный (`date1=date(2026,5,20), date2=date(2026,5,10), today_msk` поздняя) → `ValueError`. Проверить, что текст содержит обе даты.
-  - [ ] **AC #6 (параметризовать мусор):** `["", " ", "garbage", "2026/05/24", "24-05-2026", "2026-13-01", "2026-05-40", "20260524", "2026-W21-1", "2026-5-1", "0000-00-00"]` → каждый `parse_date(...)` поднимает `ValueError` (match — имя/значение). **Guard критичен именно для `20260524` (basic-формат) и `2026-W21-1` (week-дата): голый `date.fromisoformat` в 3.13 их ПРИНЯЛ БЫ** (→ `2026-05-24`/`2026-05-18`) — guard `\d{4}-\d{2}-\d{2}` их отсекает. `2026-5-1`/`2026/05/24`/`24-05-2026` отвергаются и guard'ом (нет каноничного вида). `0000-00-00`/`2026-13-01`/`2026-05-40` проходят guard, но `fromisoformat` добивает (`year 0 out of range` / невалидный месяц/день) — демонстрирует связку. Подтвердить, что это ошибка парсинга, а не падение в clamp.
-  - [ ] **Анти-зависимость (закрепляет решение Task 1) — через `ast`, не подстроку** (docstring/комментарии содержат `zoneinfo`/`pytz` → ложный красный): распарсить `ast` модуля, проверить, что в `Import`/`ImportFrom`-узлах НЕТ `zoneinfo`, `pytz`, `tzdata`. (Приём из `tests/test_env_reader.py::test_no_heavy_dependencies_imported`.) Гарантирует фикс-офсет и кросс-платформенность.
-  - [ ] Один день: `clamp_date_range(date(2026,5,24), date(2026,5,24), today_msk=date(2026,5,25))` → `(24, 24)` без ошибки (одинокий валидный день == вчера).
-- [ ] **Task 6 — Гейты верификации (обязательны перед закрытием)**
-  - [ ] `uv run mypy scripts` → зелено (strict; модуль полностью типизирован, stdlib-only, `uv.lock` не меняется — новых зависимостей нет).
-  - [ ] `uv run pytest` → зелено (новые тесты + 1.1/1.2/1.3; live по-прежнему отсеян `addopts="-m 'not live'"`).
-  - [ ] Прогнать чек-лист «Definition of Done» из Dev Notes.
+  - [x] **Параметр `today_msk` (keyword-only, default `None`)** — инъекция «сегодня» для детерминированных тестов; в проде не передаётся (берётся `moscow_today()`). _Не_ городить отдельный «мокабельный» класс — одного kwarg достаточно.
+  - [x] **AC #1:** `date2` сегодня/будущее (> ceiling) → лог INFO + `clamped2 = ceiling`, без исключения.
+  - [x] **AC #2:** `date2 ≤ ceiling` (в т.ч. ровно `== ceiling`) → не меняется, лог не пишется (нет off-by-one на границе).
+  - [x] **AC #5 (единственная проверка `date1 > clamped2` ловит оба кейса):** будущий `date1` (> ceiling ≥ clamped2) и инвертированный диапазон (`date1 > date2`, обе в прошлом, clamp не сработал) → `ValueError`. Функция чистая — `raise` происходит ДО возврата, т.е. до любого сетевого вызова у потребителя. **Осознанное отличие от directaiq:** там `start>safe_end` → тихий «успех, 0 файлов»; у нас — fail-loud.
+  - [x] `__all__ = ["MSK", "moscow_today", "moscow_yesterday", "parse_date", "format_date", "clamp_date_range"]`.
+- [x] **Task 5 — Offline-тесты `tests/test_dates.py` (AC: #1–#6)** — _см. Dev Notes → «Тестирование»_
+  - [x] `from __future__ import annotations`; без сети. Детерминизм: в clamp-тестах **всегда передавать `today_msk=date(...)`** (не зависеть от стены часов).
+  - [x] **AC #4 (МСК, не локальная зона) — через шов `_now_utc`:** `monkeypatch.setattr("scripts.utils.dates._now_utc", lambda: datetime(2026, 5, 24, 22, 30, tzinfo=timezone.utc))`. В UTC дата = 24-е, в МСК (=01:30 25-го) → `moscow_today() == date(2026,5,25)`, `moscow_yesterday() == date(2026,5,24)`. Доказывает, что используется МСК, а не UTC/локальная. (Симметрично можно проверить инстант, где МСК-дата < следующего UTC-дня — необязательно.)
+  - [x] **AC #1:** `clamp_date_range(date(2026,5,1), date(2026,5,25), today_msk=date(2026,5,25))` → `date2 == date(2026,5,24)`; `caplog` содержит INFO про clamp.
+  - [x] **AC #1 (будущее):** `date2 = date(2030,1,1)` → клампится к вчера; без исключения.
+  - [x] **AC #2:** `date2 == ceiling` (== вчера) → не меняется, лог пуст; `date2 < ceiling` → не меняется. _Граница без off-by-one._
+  - [x] **AC #3:** `format_date(date(2026,5,1)) == "2026-05-01"` (zero-pad); `parse_date("2026-05-01") == date(2026,5,1)`; round-trip.
+  - [x] **AC #5:** будущий `date1` (`date1=date(2030,1,1)`, любой `date2`) → `ValueError` (match «инвертирован|пустой»); инвертированный (`date1=date(2026,5,20), date2=date(2026,5,10), today_msk` поздняя) → `ValueError`. Проверить, что текст содержит обе даты.
+  - [x] **AC #6 (параметризовать мусор):** `["", " ", "garbage", "2026/05/24", "24-05-2026", "2026-13-01", "2026-05-40", "20260524", "2026-W21-1", "2026-5-1", "0000-00-00"]` → каждый `parse_date(...)` поднимает `ValueError` (match — имя/значение). **Guard критичен именно для `20260524` (basic-формат) и `2026-W21-1` (week-дата): голый `date.fromisoformat` в 3.13 их ПРИНЯЛ БЫ** (→ `2026-05-24`/`2026-05-18`) — guard `\d{4}-\d{2}-\d{2}` их отсекает. `2026-5-1`/`2026/05/24`/`24-05-2026` отвергаются и guard'ом (нет каноничного вида). `0000-00-00`/`2026-13-01`/`2026-05-40` проходят guard, но `fromisoformat` добивает (`year 0 out of range` / невалидный месяц/день) — демонстрирует связку. Подтвердить, что это ошибка парсинга, а не падение в clamp.
+  - [x] **Анти-зависимость (закрепляет решение Task 1) — через `ast`, не подстроку** (docstring/комментарии содержат `zoneinfo`/`pytz` → ложный красный): распарсить `ast` модуля, проверить, что в `Import`/`ImportFrom`-узлах НЕТ `zoneinfo`, `pytz`, `tzdata`. (Приём из `tests/test_env_reader.py::test_no_heavy_dependencies_imported`.) Гарантирует фикс-офсет и кросс-платформенность.
+  - [x] Один день: `clamp_date_range(date(2026,5,24), date(2026,5,24), today_msk=date(2026,5,25))` → `(24, 24)` без ошибки (одинокий валидный день == вчера).
+- [x] **Task 6 — Гейты верификации (обязательны перед закрытием)**
+  - [x] `uv run mypy scripts` → зелено (strict; модуль полностью типизирован, stdlib-only, `uv.lock` не меняется — новых зависимостей нет).
+  - [x] `uv run pytest` → зелено (новые тесты + 1.1/1.2/1.3; live по-прежнему отсеян `addopts="-m 'not live'"`).
+  - [x] Прогнать чек-лист «Definition of Done» из Dev Notes.
 
 > **Live-smoke НЕ требуется.** `dates.py` не ходит во внешний API — правило project-context «обязателен live-smoke» относится к компонентам, дёргающим Logs API (как 1.3). Не заводить пустой `@pytest.mark.live`.
 
@@ -156,10 +156,54 @@ directaiq (ref `7718bd65`): `scripts/utils/date_utils.py::get_moscow_safe_end_da
 
 ### Agent Model Used
 
-_(заполнит dev-agent)_
+claude-opus-4-7[1m] (Opus 4.7, 1M context)
 
 ### Debug Log References
 
+- `uv run pytest tests/test_dates.py -q` → 25 passed.
+- `uv run mypy scripts` → Success: no issues found in 10 source files (strict).
+- `uv run pytest -q` (полный набор) → 87 passed, 1 deselected (live отсеян `addopts="-m 'not live'"`); регрессий 1.1/1.2/1.3 нет.
+- `git diff --name-only -- uv.lock pyproject.toml` → пусто (новых зависимостей нет, модуль stdlib-only).
+
 ### Completion Notes List
 
+- Реализован `scripts/utils/dates.py` — крошечный stdlib-примитив (Tasks 1–4): `from __future__ import annotations` первой строкой, русский модульный docstring, английские идентификаторы, `logging.getLogger(__name__)`, `__all__`.
+- **Таймзона МСК = фиксированный офсет `timezone(timedelta(hours=3))`** (AC #4), НЕ `zoneinfo`/`pytz`/`tzdata` — ноль зависимостей, кросс-платформенно (NFR-2/6). Решение зафиксировано комментарием «почему» прямо у константы. Тест по `ast` (`test_no_timezone_dependencies_imported`) гарантирует отсутствие запрещённых таймзонных импортов (приём из `test_env_reader.py`, не подстрока).
+- **Шов времени `_now_utc()`** — единственная точка к стене часов; `moscow_today`/`moscow_yesterday` строятся от UTC-инстанта через `.astimezone(MSK)`, поэтому корректны независимо от локальной зоны. Тест AC #4 монкейпатчит шов инстантом 24-го 22:30 UTC (= 25-го 01:30 МСК) и доказывает, что сутки считаются от МСК, а не UTC.
+- **Строгий парсинг (AC #3, #6):** `parse_date` = guard `\d{4}-\d{2}-\d{2}` + `date.fromisoformat`. Guard режет `20260524`/`2026-W21-1`, которые голый `fromisoformat` в 3.13 ПРИНЯЛ БЫ; `fromisoformat` добивает невалидные календарно (`2026-13-01`/`2026-05-40`/`0000-00-00`). Сообщение несёт `{value!r}`. `format_date` = `date.isoformat()` (всегда zero-padded `YYYY-MM-DD`).
+- **Ядро `clamp_date_range` (AC #1, #2, #5):** `date2 > вчера` → clamp + INFO-лог; `date2 ≤ вчера` (вкл. границу) → без изменений и без лога (нет off-by-one); будущий `date1` / инвертированный диапазон → `ValueError` ДО возврата (fail-loud, осознанное отличие от directaiq «0 файлов»). Детерминизм через keyword-only `today_msk` — без отдельного мокабельного класса.
+- **`docs/dates.md` НЕ заведён осознанно:** project-context относит `dates` к «мелким хелперам, описываемым внутри родственной спеки (`cli.md`/`ingestion.md`), а не отдельным файлом»; родственная спека ещё не создана. Контракт несёт подробный модульный docstring + эта история. Применил правило project-context по умолчанию.
+- **Live-smoke не заводился** — `dates.py` не ходит во внешний API (правило «обязателен live-smoke» относится к компонентам, дёргающим Logs API).
+
 ### File List
+
+- `scripts/utils/dates.py` — **новый**. Примитивы границы дат: `MSK` (фикс-офсет UTC+3), `moscow_today`/`moscow_yesterday` (через шов `_now_utc`), `parse_date`/`format_date` (строгий `YYYY-MM-DD`), `clamp_date_range` (clamp + fail-loud валидация).
+- `tests/test_dates.py` — **новый**. 25 offline-тестов: AC #1–#6, анти-зависимость по `ast`, одинокий день == вчера; детерминизм через `today_msk` и монкейпатч `_now_utc`.
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — **изменён**. Статус 1-4: `ready-for-dev → in-progress → review`.
+
+### Change Log
+
+- 2026-05-24 — Реализована история 1.4: `scripts/utils/dates.py` (stdlib-примитив clamp «вчера по МСК» + строгий `YYYY-MM-DD`) и `tests/test_dates.py` (25 тестов). mypy strict + полный pytest зелёные; `uv.lock` без изменений. Status → review.
+
+## Review Findings
+
+_Code review 2026-05-24 (bmad-code-review; 3 слоя: Blind Hunter / Edge Case Hunter / Acceptance Auditor). Гейты подтверждены прогоном: `uv run pytest tests/test_dates.py` → 25 passed; `uv run mypy scripts` → Success (10 files, strict). Все 6 AC выполнены, ядро корректно. Итог: 0 decision-needed, 4 patch (тест-покрытие), 0 defer, 9 dismissed._
+
+### Patch (код корректен — не хватает тестов)
+
+- [x] [Review][Patch] Непокрыт ключевой путь — clamp-индуцированная инверсия → ValueError [tests/test_dates.py; код scripts/utils/dates.py:108-115] — заявленное отличие от directaiq (`date2` в будущем клампится НИЖЕ `date1` → fail-loud) не покрыто ни одним тестом: в обоих AC#5-тестах `date2 ≤ ceiling`, т.е. clamp не срабатывает и инверсию даёт уже-будущий `date1`, а не сам clamp. Добавить: (а) `date1` валиден, `date2` в будущем клампится ниже `date1` → `ValueError`; (б) одинокий «сегодня» `clamp_date_range(d, d, today_msk=d)` → `ValueError` (граница `ceiling+1`).
+- [x] [Review][Patch] Непокрыт прод-путь `clamp_date_range` без `today_msk` [tests/test_dates.py; код scripts/utils/dates.py:104] — все 7 clamp-тестов передают `today_msk` явно; ветка default (`moscow_today()`) внутри `clamp_date_range` не исполняется ни разу. Добавить тест: monkeypatch `_now_utc`, вызвать `clamp_date_range` БЕЗ `today_msk` → проверить clamp от «вчера по МСК».
+- [x] [Review][Patch] Непокрыта граница `date1 == clamped2` после активного clamp [tests/test_dates.py; код scripts/utils/dates.py:111] — равенство (нижняя кромка inversion-guard `>`) проверено только без clamp (`test_single_valid_day_equals_yesterday`). Добавить: `date2` в будущем клампится ровно к `date1` → возврат `(date1, date1)` без ошибки.
+- [x] [Review][Patch] Тесты на календарно-невалидные даты не различают ветку сообщения [tests/test_dates.py; код scripts/utils/dates.py:79-82] — `2026-13-01`/`2026-05-40`/`0000-00-00` проверяются лишь на факт `ValueError`; ветка «Невалидная календарная дата» не отделена от format-guard. Добавить `match="Невалидная календарная"` для одного такого кейса.
+
+### Dismissed (зафиксировано, патч не нужен)
+
+- `parse_date` принимает дату с обрамляющими пробелами (`.strip()`) — **спец-мандат** Task 3 (`re.fullmatch(r"\d{4}-\d{2}-\d{2}", value.strip())`); намеренное поведение, не ослабление контракта.
+- guard `\d` матчит Unicode-цифры — fail-loud сохраняется (`fromisoformat` добивает), регекс задан спекой буквально; экзотический вход.
+- `MSK.utcoffset(None).total_seconds()` в тесте — потенциальная strict-ошибка, но CI гоняет `mypy scripts`, не `tests/`; рантайм безопасен (фикс-офсет ≠ None).
+- `format_date(datetime)` дал бы время — тип-контракт `date` это документирует; защищаться от подкласса = переусложнение (NFR-6).
+- ast-тест ловит только статические import-узлы — намеренный приём спеки (против ложного срабатывания по подстроке); динамических импортов модуль не делает.
+- docstring `moscow_today` приписывает независимость от зоны `.astimezone` — формулировка-нит; код корректен.
+- около-полуночный МСК-кейс протестирован в одну сторону — линейная арифметика офсета, одного направления достаточно.
+- расхождение «25 тестов» в Dev Agent Record — **проверено**: ровно 25 прогонов (14 функций + 11 параметризаций); цифра точна.
+- `_ISO_DATE_RE` вынесен в `re.compile` вместо инлайн-`fullmatch` — косметика, поведенчески эквивалентно и чище.

@@ -1,5 +1,5 @@
 # generated: 2026-05-23
-# last_updated: 2026-05-23
+# last_updated: 2026-05-24
 # project: gamedev-analytics-unit
 # project_key: NOKEY
 # tracking_system: file-system
@@ -46,6 +46,9 @@ last_updated: 2026-05-24
 # story 1-3 in-progress → review (2026-05-24)
 # story 1-3 review → done (2026-05-24, code-review: AC/DoD ок, 3 патча применены [_MAX_RETRIES→4 + 2 теста], 6 defer)
 # story 1-4 backlog → ready-for-dev (2026-05-24)
+# story 1-4 ready-for-dev → in-progress (2026-05-24)
+# story 1-4 in-progress → review (2026-05-24)
+# story 1-4 review → done (2026-05-24, code-review: AC #1–#6 ок, гейты зелёные [pytest 92, mypy strict], 4 патча применены [+5 тестов: clamp-инверсия/прод-путь/границы/ветка-ошибки], 9 dismiss)
 project: gamedev-analytics-unit
 project_key: NOKEY
 tracking_system: file-system
@@ -57,7 +60,7 @@ development_status:
   1-1-uv-каркас-раскладка-проекта-и-ci: done
   1-2-env-ридер-кредов-метрики: done
   1-3-вендоринг-metricaclient-с-развязкой-шва-кредов: done
-  1-4-безопасная-граница-дат-clamp-вчера-по-мск: ready-for-dev
+  1-4-безопасная-граница-дат-clamp-вчера-по-мск: done
   1-5-загрузчик-каталога-схемы-и-маппинг-типов: backlog
   1-6-cli-примитивы-жизненного-цикла-logs-api: backlog
   epic-1-retrospective: optional

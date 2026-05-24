@@ -35,8 +35,9 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-23
-last_updated: 2026-05-23
+last_updated: 2026-05-24
 # story 1-1 contexted → ready-for-dev (2026-05-23)
+# story 1-2 backlog → ready-for-dev (2026-05-24)
 project: gamedev-analytics-unit
 project_key: NOKEY
 tracking_system: file-system
@@ -46,7 +47,7 @@ development_status:
   # Epic 1: Каркас юнита и канал Logs API
   epic-1: in-progress
   1-1-uv-каркас-раскладка-проекта-и-ci: done
-  1-2-env-ридер-кредов-метрики: backlog
+  1-2-env-ридер-кредов-метрики: ready-for-dev
   1-3-вендоринг-metricaclient-с-развязкой-шва-кредов: backlog
   1-4-безопасная-граница-дат-clamp-вчера-по-мск: backlog
   1-5-загрузчик-каталога-схемы-и-маппинг-типов: backlog

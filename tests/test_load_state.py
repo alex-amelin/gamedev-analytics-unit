@@ -27,7 +27,9 @@ import pytest
 from scripts.utils.catalog import Catalog, CatalogField
 from scripts.utils.env_reader import DATA_ROOT_ENV
 from scripts.utils.load_state import (
+    STATUS_FAILED,
     STATUS_LOADED,
+    STATUS_LOADING,
     count_partition_rows,
     ensure_load_state_table,
     mark_failed,
@@ -140,6 +142,34 @@ def test_mark_loaded_rejects_invalid_source(conn: duckdb.DuckDBPyConnection) -> 
     """Невалидный источник → ValueError (мусорный source не пишется в журнал)."""
     with pytest.raises(ValueError, match="source"):
         mark_loaded(conn, "sessions", "2026-05-20", 1)
+
+
+@pytest.mark.parametrize(
+    "mark, expected_status",
+    [(mark_loading, STATUS_LOADING), (mark_failed, STATUS_FAILED)],
+)
+def test_pending_mark_resets_row_count_and_loaded_at(
+    conn: duckdb.DuckDBPyConnection, mark: object, expected_status: str
+) -> None:
+    """loaded → mark_loading/mark_failed обнуляет row_count/loaded_at (двухфазная отметка, AC #6).
+
+    Суть crash-recovery: день был закоммичен (loaded, row_count проставлен), затем p81 начал
+    переоформление (loading) или зафиксировал провал (failed) — UPSERT обязан сбросить
+    row_count/loaded_at в NULL, иначе после крэша реконсиляция сверяла бы факт против
+    устаревшего счётчика «прошлого loaded» и могла бы ложно подтвердить день.
+    """
+    mark_loaded(conn, "visits", "2026-05-20", 5)  # сначала закоммичен
+    mark(conn, "visits", "2026-05-20")  # type: ignore[operator]  # затем «в процессе»/«сбой»
+
+    row = conn.execute(
+        "SELECT row_count, loaded_at, status FROM load_state "
+        "WHERE source = 'visits' AND date = '2026-05-20'"
+    ).fetchone()
+    assert row is not None
+    row_count, loaded_at, status = row
+    assert row_count is None  # сброшен: день больше не закоммичен
+    assert loaded_at is None
+    assert status == expected_status
 
 
 # --- AC #2/#3: реконсиляция подтверждает день при конъюнкции трёх условий ----------------
@@ -288,6 +318,12 @@ def test_count_partition_rows_variants(
     corrupt_path.parent.mkdir(parents=True, exist_ok=True)
     corrupt_path.write_bytes(b"garbage bytes")
     assert count_partition_rows(conn, "visits", "2026-05-19") is None
+
+    # Путь существует, но это ДИРЕКТОРИЯ {date}.parquet → None (is_file, не exists):
+    # иначе read_parquet сглобил бы вложенные parquet в агрегированный ложный count.
+    dir_path = get_raw_partition_path("visits", "2026-05-18")
+    dir_path.mkdir(parents=True, exist_ok=True)
+    assert count_partition_rows(conn, "visits", "2026-05-18") is None
 
 
 # --- Анти-зависимость: duckdb разрешён; нет тяжёлого стека/инфры/сцепки (риск №7) --------

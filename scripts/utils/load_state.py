@@ -162,21 +162,26 @@ def count_partition_rows(
     """Реальное число строк в файле партиции дня — факт (AC #5, риск №3).
 
     Путь резолвится через :func:`scripts.utils.paths.get_raw_partition_path` (валидирует
-    ``source``; ``.parquet.tmp`` сюда не попадает — резолвер даёт ``.parquet``). Файла нет
-    → ``None`` (день фактически отсутствует). Файл есть → ``count(*)`` через
-    ``read_parquet(?)`` с путём **параметром** (не sql-литерал): корень хранилища не уходит
-    в текст SQL — ни инъекций, ни проблем с кавычками. Битый/нечитаемый Parquet →
-    :class:`duckdb.Error` ловится → лог WARNING + ``None`` (AC #5: НЕ валить обновление
-    исключением; битый факт = «дня нет» под перезалив).
+    ``source``; ``.parquet.tmp`` сюда не попадает — резолвер даёт ``.parquet``). Нет
+    **обычного файла** (отсутствует ИЛИ это директория) → ``None`` (дня фактически нет).
+    Файл есть → ``count(*)`` через ``read_parquet(?)`` с путём **параметром** (не sql-литерал):
+    корень хранилища не уходит в текст SQL — ни инъекций, ни проблем с кавычками. Битый/
+    нечитаемый Parquet (:class:`duckdb.Error`) или сбой ФС при доступе (:class:`OSError`) →
+    лог WARNING + ``None`` (AC #5: НЕ валить обновление исключением; битый факт = «дня нет»
+    под перезалив).
     """
     path = get_raw_partition_path(source, date)
-    if not path.exists():
-        return None
     try:
+        # is_file (а не exists): директория с именем {date}.parquet прошла бы .exists()==True,
+        # а read_parquet сглобил бы вложенные parquet в агрегированный count — ложный факт.
+        if not path.is_file():
+            return None
         row = conn.execute(
             "SELECT count(*) FROM read_parquet(?)", [str(path)]
         ).fetchone()
-    except duckdb.Error as exc:
+    except (duckdb.Error, OSError) as exc:
+        # duckdb.Error — битый/нечитаемый Parquet; OSError — сбой ФС (битый mount/права) при
+        # is_file()/чтении. Любой → «дня нет» под перезалив, проход НЕ валим (AC #5).
         logger.warning("Партиция %s нечитаема (%s) — день под перезалив", path, exc)
         return None
     if row is None:  # count(*) всегда возвращает строку; гард ради контракта/типов
@@ -200,7 +205,14 @@ def reconcile(
     Источник истины — факт партиции: мета корректируется к нему, никогда наоборот (риск №1).
     Возвращает :class:`frozenset` подтверждённо-загруженных ``(source, date)`` для инкремента
     2.8. Решение «что лить»/перезалив/hot-window здесь НЕ принимается (границы — 2.7/2.8).
+
+    Самодостаточна: гарантирует таблицу ``load_state`` в начале (``ensure_load_state_table``
+    идемпотентен) — вызов до её создания init (4.3)/p81 (2.7) не должен ронять весь проход
+    ``CatalogException``-ом мид-проходом (дух AC #5: один сбой не валит всё обновление).
     """
+    # Self-guard: без таблицы SELECT в _load_meta бросил бы CatalogException (подкласс
+    # duckdb.Error) мимо per-day-перехвата count_partition_rows и сорвал бы весь проход.
+    ensure_load_state_table(conn)
     loaded: set[tuple[str, str]] = set()
     corrected = 0
     for source in sources:

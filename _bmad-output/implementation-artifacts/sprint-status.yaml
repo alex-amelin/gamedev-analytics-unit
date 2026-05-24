@@ -62,6 +62,7 @@ last_updated: 2026-05-24
 # story 2-1 ready-for-dev → in-progress (2026-05-24, dev-story: реализация paths.py + database_manager.py)
 # story 2-1 in-progress → review (2026-05-24, dev-story: 6 AC закрыты; paths.py [5 чистых fail-loud резолверов, ноль mkdir] + database_manager.py [connection write/read-only, read-only до init → RuntimeError, finally-close]; docs/working-layer.md; offline 24 теста [13 paths + 11 db] + анти-зависимость через ast; гейты зелёные [mypy strict, pytest 182]; uv.lock не менялся; live неприменим)
 # story 2-1 review → done (2026-05-24, code-review: 6 AC ок + риски #1–#5 закрыты, гейты зелёные [mypy strict, pytest 184], 3 патча применены [is_absolute-гейт против записи в dev-репо + 2× обёртка сырого OSError → ValueError/RuntimeError; +2 регресс-теста], 0 defer, 12 dismiss)
+# story 2-2 backlog → ready-for-dev (2026-05-24, create-story: атомарная запись Parquet-партиции дня; parquet_store [новое, НЕ вендоринг]; Parquet пишется in-memory DuckDB БЕЗ pandas/polars/pyarrow [закреплено ast-тестом]; строки as-is VARCHAR + переименование колонок по каталогу 1.5; temp→os.replace в том же каталоге [Win-safe]; пустой день → пустая партиция со схемой; НЕ трогает gdau.duckdb/.writer.lock; docs/ingestion.md; live неприменим)
 project: gamedev-analytics-unit
 project_key: NOKEY
 tracking_system: file-system
@@ -81,7 +82,7 @@ development_status:
   # Epic 2: Приём данных и безопасное обновление хранилища
   epic-2: in-progress
   2-1-соединение-duckdb-и-резолюция-путей-хранилища: done
-  2-2-атомарная-запись-parquet-партиции-дня: backlog
+  2-2-атомарная-запись-parquet-партиции-дня: ready-for-dev
   2-3-жёсткая-сверка-строк: backlog
   2-4-мета-таблица-load-state-реконсиляция-мета-факт: backlog
   2-5-лок-одного-писателя: backlog

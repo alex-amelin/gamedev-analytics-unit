@@ -1,6 +1,6 @@
 # Story 2.9: Команда `gdau-logs update`
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -54,38 +54,38 @@ so that одной командой безопасно довести/обнов
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Подкоманда `update` в парсере + диспетч + docstring (AC #1/#4/#5)**
-  - [ ] В `_create_parser` добавить subparser **`update`** рядом с lifecycle-командами (AC #4): `--date1` (required, `YYYY-MM-DD`), `--date2` (required, help: «клампится на «вчера по МСК»»), `--source` (`choices=["visits","hits","both"]`, **`default="both"`**, help проговаривает дефолт — AC #5), `--hot-window` (`type=int`, `default=None`, help: «размер hot-window, дней; 0 — выключить; по умолчанию 3»). Неинтерактивно.
-  - [ ] В `_dispatch` добавить ветку `if command == "update": return self._handle_update(args)`.
-  - [ ] Обновить **module-docstring** `logs_api_cli.py` и комментарий «Граница скоупа»: `update` теперь **здесь** (убрать формулировку «update — отдельная работа Эпика 2, не этот компонент»; оставить, что тяжёлая механика — в p81/utils, CLI лишь оркеструет поверхность и владеет кодами возврата).
-- [ ] **Task 2 — Оркестрация `_handle_update`: цикл по источникам, агрегация, коды (AC #1/#2/#6/#7/#8)**
-  - [ ] Добавить **`_handle_update(self, args) -> list[tuple[str, IngestRangeResult | None, str | None]]`** (или локальный dataclass/NamedTuple для читаемости — на усмотрение dev, типизировать строго):
-    - [ ] `p81 = importlib.import_module("scripts.8x_metrica_logs_api.p81_load_logs")` (риск №1, **в теле handler**).
-    - [ ] `sources = ["visits", "hits"] if args.source == "both" else [args.source]`.
-    - [ ] `hot_window = p81.DEFAULT_HOT_WINDOW_DAYS if args.hot_window is None else args.hot_window`.
-    - [ ] Цикл per source: `try: result = p81.ingest_range(source, args.date1, args.date2, hot_window_days=hot_window); record (source, result, None)` → `except (ValueError, RuntimeError, OSError) as exc: logger.error("Источник %s не доведён: %s", source, exc); record (source, None, str(exc))`. **`KeyboardInterrupt`/`SystemExit` НЕ ловить** (риск №2/№6 — проброс к `main`; лок `ingest_range` снят `finally`).
-  - [ ] Печать сводки (человекочитаемо, как остальные handler'ы): успех `f"{source}: загружено {len(result.loaded_dates)} дн., пропущено {len(result.skipped_dates)} дн., строк {result.total_rows}"`; сбой `f"{source}: ОШИБКА — {error}"`.
-  - [ ] **Агрегация кода (риск №4, AC #2/#6):** если есть хоть один источник с ошибкой → напечатать resumable-подсказку (риск №5/AC #8) и `raise SystemExit(1)`. Иначе вернуть список outcomes (неявный exit 0).
-  - [ ] В `main()` добавить **`except KeyboardInterrupt`** (риск №6, AC #7): `logger.error("Прервано оператором — .writer.lock освобождён; повторите ту же команду для до-грузки оставшихся дней (инкремент).")` + `raise SystemExit(130) from None`. Существующий `except (ValueError, RuntimeError, FileExistsError, OSError)` уже покрывает `WriterLockHeldError`(`RuntimeError`)/`RowCountMismatchError`(`RuntimeError`) — но в `update` они ловятся **раньше**, в per-source `except` (риск №3), и не доходят до `main` как fatal.
-- [ ] **Task 3 — Документация (часть DoD)**
-  - [ ] `docs/cli.md`: добавить `update` в список команд («довести/обновить данные игры за диапазон одной командой; инкремент + перезалив hot-window; коды возврата; оба источника по умолчанию»); обновить раздел «Границы» (полный приём за диапазон `update` теперь реализован здесь, а не «отдельная работа Эпика 2»).
-  - [ ] `docs/ingestion.md`: обновить хвост, где «Команда запуска одной строкой (`gdau-logs update`…) — история 2.9» → теперь реализовано; описать человеческим языком: одна команда доводит диапазон по источникам (каждый — под своим замком, последовательно), пропускает уже загруженное, перезаливает свежее окно, возвращает ненулевой код при сбое любого источника, повтор безопасен.
-- [ ] **Task 4 — Offline-тесты (`tests/test_logs_api_cli.py`, дополнение)**
-  - [ ] **Парсинг (AC #4/#5):** `update` присутствует среди подкоманд; `--source` отсутствует → `default="both"`; `--source both/visits/hits` → корректный список; `--hot-window` опционален (None → дефолт `DEFAULT_HOT_WINDOW_DAYS`, явное значение пробрасывается).
-  - [ ] **Диспетч + сводка (AC #1):** мок `p81.ingest_range` (через `monkeypatch.setattr` на importlib-загруженный модуль) возвращает `IngestRangeResult` → печатается сводка, код 0, `ingest_range` вызван **по каждому источнику** (`both` → два вызова с верными `source`/`date1`/`date2`/`hot_window_days`).
-  - [ ] **Агрегация кода (AC #2/#6):** все ок → exit 0; `both`, где `ingest_range` бросает для visits и ок для hits → печать обоих (visits ОШИБКА, hits сводка) + `SystemExit(1)` + resumable-подсказка; оба бросают → `SystemExit(1)`. **Второй источник опрашивается даже после сбоя первого** (порядок/счётчик вызовов).
-  - [ ] **Fail-fast как per-source (риск №3):** `ingest_range` бросает `ValueError` (инверсия/`hot_window<0`)/`WriterLockHeldError`/`ValueError` кредов → ловится per-source → ненулевой код через агрегацию, без трейсбека.
-  - [ ] **KeyboardInterrupt (AC #7):** `ingest_range` (мок) бросает `KeyboardInterrupt` → НЕ выловлен per-source → `main()` ловит → `SystemExit(130)` + сообщение.
-  - [ ] **Импорт через importlib:** dispatch отрабатывает на реальном модуле p81 с мок-`ingest_range` (косвенно подтверждает, что digit-префикс грузится строкой без `SyntaxError`).
-- [ ] **Task 5 — Live-smoke (`tests/test_logs_api_cli_live.py`, дополнение; opt-in `@pytest.mark.live`)**
-  - [ ] End-to-end `update` за **узкое окно (1 день)** против РЕАЛЬНОГО Logs API: позвать `_handle_update`/`main()` с argv на `--source` (минимум один источник; в идеале оба) — реально доезжает в сырьё + view'ы. Креды из `.env` хранилища; нет кредов → `pytest.skip` с причиной (не ложный красный).
-  - [ ] **Критерий live-DoD (LESSONS Сложность 1):** закрывается **только зелёным end-to-end** прогоном (данные легли, сверка сошлась, код 0), не фактом запуска. Узкое окно/малый набор полей — уважать квоту (≤5000/сут) и асинхронный цикл (poll ~30s); живой лог обязателен (`-s --log-cli-level=INFO`). Live пишет в **реальное хранилище под `.writer.lock`** + тратит квоту; прерванные прогоны оставляют осиротевшие log-запросы (`clean` только на happy-path) — проговорить в докстринге смоука (LESSONS Сложность 6).
-  - [ ] **Идемпотентность вживую (AC #3/SM-2):** повторный `update` того же дня → пропуск/перезалив, код 0, база не сломана.
-- [ ] **Гейты перед сдачей**
-  - [ ] `uv run mypy scripts` → зелено (strict; `IngestRangeResult | None`/`str | None`; `sources: list[str]`; без `Any`-дыр).
-  - [ ] `uv run pytest` (offline) → зелено на ubuntu + windows; `tests/` собирает ≥1 тест; маркер `live` НЕ гоняется в стандартном прогоне.
-  - [ ] `uv run pytest -m live` → зелёный end-to-end (см. Task 5) с освежением фикстур, если контракт того потребовал.
-  - [ ] `uv.lock` не менялся (всё в стеке/stdlib — `argparse`/`importlib`/`datetime` + готовые примитивы). Прогнать чек-лист «Definition of Done».
+- [x] **Task 1 — Подкоманда `update` в парсере + диспетч + docstring (AC #1/#4/#5)**
+  - [x] В `_create_parser` добавить subparser **`update`** рядом с lifecycle-командами (AC #4): `--date1` (required, `YYYY-MM-DD`), `--date2` (required, help: «клампится на «вчера по МСК»»), `--source` (`choices=["visits","hits","both"]`, **`default="both"`**, help проговаривает дефолт — AC #5), `--hot-window` (`type=int`, `default=None`, help: «размер hot-window, дней; 0 — выключить; по умолчанию 3»). Неинтерактивно.
+  - [x] В `_dispatch` добавить ветку `if command == "update": return self._handle_update(args)`.
+  - [x] Обновить **module-docstring** `logs_api_cli.py` и комментарий «Граница скоупа»: `update` теперь **здесь** (убрать формулировку «update — отдельная работа Эпика 2, не этот компонент»; оставить, что тяжёлая механика — в p81/utils, CLI лишь оркеструет поверхность и владеет кодами возврата).
+- [x] **Task 2 — Оркестрация `_handle_update`: цикл по источникам, агрегация, коды (AC #1/#2/#6/#7/#8)**
+  - [x] Добавить **`_handle_update(self, args) -> list[_UpdateOutcome]`** (локальный `NamedTuple` `_UpdateOutcome` — типизировано строго, без `Any`-дыр: поля копируются сразу за `Any`-границей importlib):
+    - [x] `p81 = importlib.import_module("scripts.8x_metrica_logs_api.p81_load_logs")` (риск №1, **в теле handler**).
+    - [x] `sources = ["visits", "hits"] if args.source == "both" else [args.source]`.
+    - [x] `hot_window: int = p81.DEFAULT_HOT_WINDOW_DAYS if args.hot_window is None else args.hot_window` (пиннинг `: int` уводит `Any` в тип).
+    - [x] Цикл per source: `try: result = p81.ingest_range(source, args.date1, args.date2, hot_window_days=hot_window); record outcome` → `except (ValueError, RuntimeError, OSError) as exc: logger.error("Источник %s не доведён: %s", source, exc); record error`. **`KeyboardInterrupt`/`SystemExit` НЕ ловить** (риск №2/№6 — проброс к `main`; лок `ingest_range` снят `finally`).
+  - [x] Печать сводки (человекочитаемо, как остальные handler'ы): успех `f"{source}: загружено … дн., пропущено … дн., строк …"`; сбой `f"{source}: ОШИБКА — {error}"`.
+  - [x] **Агрегация кода (риск №4, AC #2/#6):** если есть хоть один источник с ошибкой → напечатать resumable-подсказку (риск №5/AC #8) и `raise SystemExit(1)`. Иначе вернуть список outcomes (неявный exit 0).
+  - [x] В `main()` добавить **`except KeyboardInterrupt`** (риск №6, AC #7): `logger.error("Прервано оператором — .writer.lock освобождён; повторите ту же команду …")` + `raise SystemExit(130) from None`. Существующий `except (ValueError, RuntimeError, FileExistsError, OSError)` покрывает `WriterLockHeldError`/`RowCountMismatchError`, но в `update` они ловятся **раньше**, per-source (риск №3).
+- [x] **Task 3 — Документация (часть DoD)**
+  - [x] `docs/cli.md`: добавить `update` в список команд («довести/обновить данные игры за диапазон одной командой; инкремент + перезалив hot-window; коды возврата; оба источника по умолчанию»); обновить раздел «Границы» (полный приём за диапазон `update` теперь реализован здесь как тонкая поверхность).
+  - [x] `docs/ingestion.md`: новый раздел «Команда обновления» вместо forward-ссылок «история 2.9»; человеческим языком: одна команда доводит диапазон по источникам (каждый — под своим замком, последовательно), пропускает уже загруженное, перезаливает свежее окно, возвращает ненулевой код при сбое любого источника, повтор безопасен.
+- [x] **Task 4 — Offline-тесты (`tests/test_logs_api_cli.py`, дополнение)**
+  - [x] **Парсинг (AC #4/#5):** `update` среди подкоманд (расширен `test_help_lists_all_subcommands`); `--source` отсутствует → `default="both"`; `--source both/visits/hits`; `--hot-window` опционален (None → дефолт `DEFAULT_HOT_WINDOW_DAYS`, явное значение пробрасывается); даты required; невалидный source → exit 2.
+  - [x] **Диспетч + сводка (AC #1):** мок `p81.ingest_range` (`monkeypatch.setattr` на importlib-загруженный кэшированный модуль) возвращает `IngestRangeResult` → печатается сводка, код 0, `ingest_range` вызван **по каждому источнику** (`both` → два вызова с верными `source`/`date1`/`date2`/`hot_window_days`).
+  - [x] **Агрегация кода (AC #2/#6):** все ок → exit 0; `both`, где `ingest_range` бросает для visits и ок для hits → печать обоих + `SystemExit(1)` + resumable-подсказка; оба бросают → `SystemExit(1)`. **Второй источник опрашивается даже после сбоя первого** (`sources_called`).
+  - [x] **Fail-fast как per-source (риск №3):** `ingest_range` бросает `WriterLockHeldError`/`ValueError` → ловится per-source → ненулевой код через агрегацию, без трейсбека.
+  - [x] **KeyboardInterrupt (AC #7):** `ingest_range` (мок) бросает `KeyboardInterrupt` → НЕ выловлен per-source → `main()` ловит → `SystemExit(130)` + сообщение (hits не опрошен — цикл оборван).
+  - [x] **Импорт через importlib:** dispatch отрабатывает на реальном модуле p81 с мок-`ingest_range` (подтверждает, что digit-префикс грузится строкой без `SyntaxError`).
+- [x] **Task 5 — Live-smoke (`tests/test_logs_api_cli_live.py`, дополнение; opt-in `@pytest.mark.live`)**
+  - [x] End-to-end `update` за **узкое окно (1 день)** через `main()` против РЕАЛЬНОГО Logs API: оба источника — реально доехали в сырьё + view'ы. Креды/корень хранилища из окружения; нет → `pytest.skip` (не ложный красный).
+  - [x] **Критерий live-DoD (LESSONS Сложность 1):** закрыт **зелёным end-to-end** (2026-05-24: visits 1893 стр., hits 79472 стр.; партиции созданы, `load_state` loaded — сверка сошлась, код 0). Узкое окно; докстринг проговаривает side-effects: запись в реальное хранилище под `.writer.lock` + трата квоты + осиротевшие log-запросы при обрыве (LESSONS Сложность 6).
+  - [x] **Идемпотентность вживую (AC #3/SM-2):** повторный `update` того же дня (visits, в hot-window) → перезалив, код 0, число строк стабильно (1893 → 1893) — база не сломана.
+- [x] **Гейты перед сдачей**
+  - [x] `uv run mypy scripts` → зелено (strict, win32 + `--platform linux`, 19 файлов; локальный `_UpdateOutcome`, `hot_window: int`, `sources: list[str]`; без `Any`-дыр).
+  - [x] `uv run pytest` (offline) → зелено (331 passed, 8 live deselected); маркер `live` НЕ гоняется в стандартном прогоне.
+  - [x] `uv run pytest -m live` → зелёный end-to-end (4 теста файла: 2 evaluate + 2 update); освежение фикстур не потребовалось (контракт сошёлся).
+  - [x] `uv.lock` не менялся (всё в стеке/stdlib — `argparse`/`importlib`/`datetime`/`typing` + готовые примитивы). Чек-лист «Definition of Done» пройден.
 
 ## Dev Notes
 
@@ -184,11 +184,65 @@ return outcomes
 
 ### Agent Model Used
 
+claude-opus-4-7[1m] (Claude Opus 4.7, 1M context) — dev-story workflow.
+
 ### Debug Log References
+
+- Эмпирическая проверка mypy: атрибуты модуля из `importlib.import_module(...)` видятся как
+  `Any` (revealed type `Any`). Следствие дизайна: `p81.ingest_range(...)`/
+  `p81.DEFAULT_HOT_WINDOW_DAYS` пиннятся в конкретные типы **сразу** за `Any`-границей
+  (`hot_window: int`, поля `IngestRangeResult` → локальный `_UpdateOutcome`), чтобы не было
+  `Any`-дыр (project-context). `IngestRangeResult` нельзя импортировать в шапку (digit-префикс
+  `8x_…` → `SyntaxError` на `import`-statement, и под `TYPE_CHECKING` тоже).
+- RED→GREEN: 10 новых offline-тестов падали до реализации (`update` — invalid choice), затем
+  все зелёные.
+- Live-прогон (`GDAU_DATA_ROOT=G:/gdau-smoke uv run pytest -m live`): end-to-end `update`
+  visits 1893 / hits 79472 строки за 2026-05-24, идемпотентный повтор visits 1893 → 1893; оба
+  теста PASSED (~4:45 на 4 цикла create→poll→download→write→verify→mark_loaded→clean).
 
 ### Completion Notes List
 
+- **Вариант B2 соблюдён дословно:** `scripts/8x_metrica_logs_api/p81_load_logs.py` **НЕ
+  тронут** (отсутствует в `git status`). `_handle_update` зовёт `ingest_range(source, …)`
+  verbatim по каждому источнику — лок берётся **внутри** `ingest_range` per source
+  (последовательно). Один лок на оба источника осознанно не вводился (в модели «один
+  оператор» выгоды нет, простота+стабильность перевешивают).
+- **Все 8 AC закрыты:** AC #1 (оркестрация диапазона по источникам через `ingest_range`, view
+  отражают — подтверждено live); #2 (успех→0, сбой→ненулевой без трейсбека); #3 (идемпотентность
+  — live повтор 1893→1893, наследуется из 2.7/2.8); #4 (`update` в `--help` рядом с lifecycle);
+  #5 (`default="both"` задокументирован); #6 (оба источника опрашиваются, ненулевой код при сбое
+  любого — `sources_called` тест); #7 (`KeyboardInterrupt`→`SystemExit(130)`+сообщение, лок снят
+  `finally` ingest_range); #8 (resumable-подсказка про дневную квоту).
+- **`_UpdateOutcome` (локальный `NamedTuple` в CLI)** — вместо `IngestRangeResult` в сигнатуре:
+  обходит digit-префикс и `Any`-дыры, пиннит поля за границей importlib. История это явно
+  разрешает («локальный dataclass/NamedTuple на усмотрение dev»).
+- **Наблюдаемость (LESSONS Сложность 4)** наследуется бесплатно: прогресс по фазам — из INFO-логов
+  `load_day`/`ingest_range` (видно в live-прогоне) + `basicConfig(INFO)`; `_handle_update`
+  добавляет финальную человекочитаемую сводку по источнику.
+- Гейты зелёные: mypy strict win32+linux (19 файлов), pytest offline 331 passed, live 4 passed;
+  `uv.lock`/`pyproject.toml` не менялись.
+
 ### File List
+
+- `scripts/tools/logs_api_cli.py` — M: подкоманда `update` в `_create_parser`; `_UpdateOutcome`
+  (`NamedTuple`); `_handle_update`; ветка `_dispatch`; `except KeyboardInterrupt` в `main`;
+  обновлён module-docstring/«Граница скоупа»; импорты `importlib`, `NamedTuple`.
+- `tests/test_logs_api_cli.py` — M: секция тестов `update` (парсинг/диспетч/агрегация/fail-fast/
+  KeyboardInterrupt/importlib); `import importlib`; `update` добавлен в `test_help_lists_all_subcommands`.
+- `tests/test_logs_api_cli_live.py` — M: live-smoke `update` (end-to-end оба источника +
+  идемпотентность); обновлён module-docstring; импорты `importlib`/`sys`/`DatabaseManager`/`paths`.
+- `docs/cli.md` — M: `update` в списке команд; переписан раздел «Границы»; нюанс кодов возврата
+  `update` в контракте.
+- `docs/ingestion.md` — M: новый раздел «Команда обновления (`gdau-logs update`)»; forward-ссылки
+  «история 2.9» → ссылки на раздел; вводная сноска и реализация-строка обновлены.
+
+### Change Log
+
+- 2026-05-25: Реализована подкоманда `gdau-logs update` (story 2.9, вариант B2). Тонкая
+  CLI-поверхность поверх `ingest_range` (2.8): прогон обоих источников per source под своим
+  локом, агрегация частичного сбоя в ненулевой код, resumable-сообщение, `KeyboardInterrupt`→
+  `SystemExit(130)`. p81 не тронут. +10 offline-тестов, +2 live-теста. Гейты зелёные, `uv.lock`
+  не менялся.
 
 ## Definition of Done
 
@@ -201,3 +255,9 @@ return outcomes
 7. Offline-тесты `test_logs_api_cli.py`: парсинг/дефолт source/диспетч/цикл per source/агрегация кода/смешанный результат (оба опрошены)/fail-fast как per-source/KeyboardInterrupt/importlib-загрузка. (AC #1/#2/#5/#6/#7)
 8. Live-smoke `test_logs_api_cli_live.py`: зелёный end-to-end `update` за 1 день (skip без кредов); идемпотентность вживую. Критерий live-DoD соблюдён (LESSONS Сложность 1). (AC #1/#3)
 9. Гейты зелёные: `mypy --strict scripts` (win32 + `--platform linux`), `pytest` (offline, ubuntu + windows), `pytest -m live` зелёный; `uv.lock` не менялся.
+
+### Review Findings
+
+_Code review 2026-05-25 (3 слоя Opus: Blind Hunter / Edge Case Hunter / Acceptance Auditor). Acceptance Auditor: все 8 AC PASS. Триаж: 1 decision-needed, 0 patch, 0 defer, 22 dismiss._
+
+- [x] [Review][Decision→Patch применён, вариант 1] Сырой `duckdb.Error` из `ingest_range` утекал мимо обоих `except` → нарушал AC #2/#4 (трейсбек вместо понятного сообщения) и AC #6 (второй источник не опрашивается) — `duckdb.Error` наследует напрямую `Exception` (MRO: `Error→Exception→BaseException`), НЕ `RuntimeError`/`OSError`/`ValueError` (проверено `uv run`). `ingest_range` зовёт `ensure_load_state_table` (`load_state.py:113`), `create_views`, `reconcile` (`load_state.py:234/253`), `mark_loaded/loading/failed` (`load_state.py:134/146/156`) **без** обёртки их `duckdb.Error` (обёрнут только `count_partition_rows:182`). При сбое БД/IO (повреждение/занятый файл/нет места/битый parquet при выводе схемы view) сырой `duckdb.Error`: (1) минул бы per-source `except` в `_handle_update` → цикл рвётся, второй источник не опрошен (AC #6); (2) минул бы `except` в `main` → полный трейсбек (AC #2/#4). `update` — первая CLI-команда, открывающая DuckDB, → зазор живой именно с 2.9. **✅ РЕШЕНО (Шеф делегировал «выбери лучший вариант»): вариант 1 — фикс в CLI, B2 сохранён.** `import duckdb` в `logs_api_cli.py`; `duckdb.Error` добавлен в per-source `except (ValueError, RuntimeError, OSError, duckdb.Error)` `_handle_update` (→ второй источник опрашивается, AC #6) и в `except` `main` (→ без трейсбека, AC #2/#4); докстринги `_handle_update`/`main` синхронизированы. **+2 регресс-теста:** `test_update_duckdb_error_caught_per_source` (per-source: visits→`duckdb.Error`, hits ок → оба опрошены, exit 1, сводка), `test_main_duckdb_error_clean_exit` (сетка `main`: `duckdb.Error` из `_dispatch` → exit 1 + сообщение). Гейты зелёные: mypy strict win32+linux 19 файлов, pytest **333 passed** (было 331), 8 live deselected. **p81 НЕ тронут.** [Источники: edge (High) + blind]

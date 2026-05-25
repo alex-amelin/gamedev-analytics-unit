@@ -186,7 +186,7 @@ def test_real_catalog_loads_without_loss() -> None:
 
     Прогон БЕЗ аргумента покрывает прод-ветку резолюции пути от модуля (риск #4).
     «Без потерь» сверяется с сырым числом строк данных файла (устойчиво к росту),
-    плюс зафиксирован текущий снимок 74 visits + 41 hits = 115.
+    плюс зафиксирован текущий снимок 73 visits + 41 hits = 114.
     """
     catalog = load_catalog()
 
@@ -195,9 +195,9 @@ def test_real_catalog_loads_without_loss() -> None:
         raw_data_rows = sum(1 for _ in csv.reader(handle)) - 1  # минус заголовок
     assert len(catalog.fields) == raw_data_rows
 
-    assert len(catalog.fields_for("visits")) == 74
+    assert len(catalog.fields_for("visits")) == 73
     assert len(catalog.fields_for("hits")) == 41
-    assert len(catalog.fields) == 115
+    assert len(catalog.fields) == 114
 
     visits_types = catalog.duckdb_types("visits")
     hits_types = catalog.duckdb_types("hits")

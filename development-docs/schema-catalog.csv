@@ -11,31 +11,30 @@ visits,visit_duration,ym:s:visitDuration,BIGINT,Время на сайте (де
 visits,bounce,ym:s:bounce,BOOLEAN,Отказность
 visits,region_country,ym:s:regionCountry,VARCHAR,Страна (ISO)
 visits,client_id,ym:s:clientID,HUGEINT,Анонимный идентификатор пользователя в браузере (first-party cookies)
-visits,is_robot_pro,ym:s:isRobotPro,BOOLEAN,"Роботность визита по данным антифрода Директа и поведению на сайте. Возможные значения: 0 — не роботный визит, 1 — роботный визит.; Данные в поле актуальны с 19 апреля 2025 года и доступны только на счетчиках в Метрике Про."
 visits,goals_id,ym:s:goalsID,BIGINT[],"Номера целей, достигнутых за данный визит"
 visits,goals_serial_number,ym:s:goalsSerialNumber,BIGINT[],Порядковые номера достижений цели с конкретным идентификатором
 visits,goals_date_time,ym:s:goalsDateTime,TIMESTAMP[],Время достижения каждой цели (в часовом поясе UTC+3)
 visits,goals_price,ym:s:goalsPrice,BIGINT[],Ценность цели
 visits,goals_order,ym:s:goalsOrder,VARCHAR[],Идентификатор заказов
 visits,goals_currency,ym:s:goalsCurrency,VARCHAR[],Идентификатор валюты
-visits,traffic_source,ym:s:TrafficSource,VARCHAR,Источник трафика
-visits,adv_engine,ym:s:AdvEngine,VARCHAR,Рекламная система
-visits,referal_source,ym:s:ReferalSource,VARCHAR,Переход с сайтов
-visits,search_engine_root,ym:s:SearchEngineRoot,VARCHAR,Поисковая система
-visits,search_engine,ym:s:SearchEngine,VARCHAR,Поисковая система (детально)
-visits,social_network,ym:s:SocialNetwork,VARCHAR,Cоциальная сеть
-visits,social_network_profile,ym:s:SocialNetworkProfile,VARCHAR,Группа социальной сети
+visits,last_traffic_source,ym:s:lastTrafficSource,VARCHAR,Источник трафика
+visits,last_adv_engine,ym:s:lastAdvEngine,VARCHAR,Рекламная система
+visits,last_referal_source,ym:s:lastReferalSource,VARCHAR,Переход с сайтов
+visits,last_search_engine_root,ym:s:lastSearchEngineRoot,VARCHAR,Поисковая система
+visits,last_search_engine,ym:s:lastSearchEngine,VARCHAR,Поисковая система (детально)
+visits,last_social_network,ym:s:lastSocialNetwork,VARCHAR,Cоциальная сеть
+visits,last_social_network_profile,ym:s:lastSocialNetworkProfile,VARCHAR,Группа социальной сети
 visits,referer,ym:s:referer,VARCHAR,Реферер
-visits,direct_click_order,ym:s:DirectClickOrder,BIGINT,Кампания Яндекс Директа
-visits,direct_banner_group,ym:s:DirectBannerGroup,BIGINT,Группа объявлений
-visits,direct_click_banner,ym:s:DirectClickBanner,VARCHAR,Объявление Яндекс Директа
-visits,direct_click_order_name,ym:s:DirectClickOrderName,VARCHAR,Название кампании Яндекс Директа
-visits,click_banner_group_name,ym:s:ClickBannerGroupName,VARCHAR,Название группы объявлений
-visits,direct_click_banner_name,ym:s:DirectClickBannerName,VARCHAR,Название объявления Яндекс Директа
-visits,direct_phrase_or_cond,ym:s:DirectPhraseOrCond,VARCHAR,Условие показа объявления
-visits,direct_platform_type,ym:s:DirectPlatformType,VARCHAR,Тип площадки
-visits,direct_platform,ym:s:DirectPlatform,VARCHAR,Площадка
-visits,direct_condition_type,ym:s:DirectConditionType,VARCHAR,Тип условия показа объявления
+visits,last_direct_click_order,ym:s:lastDirectClickOrder,BIGINT,Кампания Яндекс Директа
+visits,last_direct_banner_group,ym:s:lastDirectBannerGroup,BIGINT,Группа объявлений
+visits,last_direct_click_banner,ym:s:lastDirectClickBanner,VARCHAR,Объявление Яндекс Директа
+visits,last_direct_click_order_name,ym:s:lastDirectClickOrderName,VARCHAR,Название кампании Яндекс Директа
+visits,last_click_banner_group_name,ym:s:lastClickBannerGroupName,VARCHAR,Название группы объявлений
+visits,last_direct_click_banner_name,ym:s:lastDirectClickBannerName,VARCHAR,Название объявления Яндекс Директа
+visits,last_direct_phrase_or_cond,ym:s:lastDirectPhraseOrCond,VARCHAR,Условие показа объявления
+visits,last_direct_platform_type,ym:s:lastDirectPlatformType,VARCHAR,Тип площадки
+visits,last_direct_platform,ym:s:lastDirectPlatform,VARCHAR,Площадка
+visits,last_direct_condition_type,ym:s:lastDirectConditionType,VARCHAR,Тип условия показа объявления
 visits,utm_campaign,ym:s:UTMCampaign,VARCHAR,UTM Campaign
 visits,utm_content,ym:s:UTMContent,VARCHAR,UTM Content
 visits,utm_medium,ym:s:UTMMedium,VARCHAR,UTM Medium
@@ -71,8 +70,8 @@ visits,parsed_params_key7,ym:s:parsedParamsKey7,VARCHAR[],"Параметры в
 visits,parsed_params_key8,ym:s:parsedParamsKey8,VARCHAR[],"Параметры визита, ур. 8"
 visits,parsed_params_key9,ym:s:parsedParamsKey9,VARCHAR[],"Параметры визита, ур. 9"
 visits,parsed_params_key10,ym:s:parsedParamsKey10,VARCHAR[],"Параметры визита, ур. 10"
-visits,recommendation_system,ym:s:RecommendationSystem,VARCHAR,Переход из рекомендательных систем. Подробнее о параметре
-visits,messenger,ym:s:Messenger,VARCHAR,Переход из мессенджера. Подробнее о параметре
+visits,last_recommendation_system,ym:s:lastRecommendationSystem,VARCHAR,Переход из рекомендательных систем. Подробнее о параметре
+visits,last_messenger,ym:s:lastMessenger,VARCHAR,Переход из мессенджера. Подробнее о параметре
 hits,watch_id,ym:pv:watchID,HUGEINT,Идентификатор события
 hits,page_view_id,ym:pv:pageViewID,BIGINT,"Идентификатор просмотра, в рамках которого произошло событие"
 hits,client_id,ym:pv:clientID,HUGEINT,Анонимный идентификатор пользователя в браузере (first-party cookies)

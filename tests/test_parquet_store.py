@@ -109,6 +109,33 @@ def test_preserves_none_cells_verbatim(
     assert data == [("17298374650000000001", "2026-05-20 12:34:56", None)]
 
 
+def test_special_characters_round_trip_verbatim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Спецсимволы и различие ``""``↔``NULL`` сохраняются дословно (raw-integrity).
+
+    Сырьё грузится bulk через транзиентный CSV + ``read_csv`` (вместо построчного
+    ``executemany`` — он не масштабируется на реальном объёме дня, вскрыто live-smoke 2.7).
+    Тест фиксирует, что round-trip не искажает значения: запятая внутри ячейки (формат
+    массива), встроенные кавычки, пустая строка ``""`` (остаётся строкой) и ``None`` (→NULL)
+    различимы и точны.
+    """
+    monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path))
+
+    rows = [
+        ["17298374650000000001", "", "[8273645,8273646]"],  # пустая строка / массив с запятой
+        ["17298374650000000002", 'say "hi"', None],          # встроенные кавычки / None→NULL
+    ]
+    write_partition("visits", "2026-05-20", _VISITS_COLUMNS, rows, catalog=_catalog())
+
+    _, types, data = _read(get_raw_partition_path("visits", "2026-05-20"))
+    assert types == ["VARCHAR", "VARCHAR", "VARCHAR"]
+    assert data == [
+        ("17298374650000000001", "", "[8273645,8273646]"),   # "" != NULL
+        ("17298374650000000002", 'say "hi"', None),          # None → NULL
+    ]
+
+
 # --- AC #2/#5: temp→rename в той же ФС; tmp после записи не остаётся --------------------
 
 

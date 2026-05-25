@@ -44,6 +44,28 @@ _TMP_TABLE = "_raw"
 
 __all__ = ["write_partition"]
 
+# Параметры read_csv для bulk-загрузки транзиентного CSV (см. write_partition). Round-trip
+# None↔NULL / пустая строка / спецсимволы подтверждён эмпирически на DuckDB 1.5:
+# allow_quoted_nulls=false → закавыченная "" остаётся пустой строкой, а незакавыченная
+# пустая ячейка читается как NULL; all_varchar=true → ни типизации, ни парсинга массивов.
+_READ_CSV_OPTS = (
+    "delim=',', quote='\"', escape='\"', header=false, all_varchar=true, "
+    "new_line='\\n', allow_quoted_nulls=false"
+)
+
+
+def _encode_csv_cell(cell: str | None) -> str:
+    """Сериализовать одну ячейку сырья в поле RFC-4180 CSV для bulk-загрузки read_csv.
+
+    ``None`` → **незакавыченная** пустая ячейка (read_csv с ``allow_quoted_nulls=false``
+    читает её как ``NULL``); любая строка, включая пустую ``""``, → закавычено с удвоением
+    внутренних кавычек → read_csv возвращает ТОЧНОЕ значение, в т.ч. с запятыми, табами,
+    переводами строк и пустую строку (raw-integrity: сырьё дословно, без искажений).
+    """
+    if cell is None:
+        return ""
+    return '"' + cell.replace('"', '""') + '"'
+
 
 def write_partition(
     source: str,
@@ -128,8 +150,10 @@ def write_partition(
             f"Не удалось создать каталог партиции {partition_path.parent}: {exc}"
         ) from exc
 
-    # .tmp в том же каталоге (та же ФС — иначе rename не атомарен, AC #5).
+    # .tmp в том же каталоге (та же ФС — иначе rename не атомарен, AC #5). Рядом —
+    # транзиентный CSV для bulk-загрузки (его тоже убираем в finally).
     tmp_path = partition_path.with_suffix(".parquet.tmp")
+    rows_csv_path = partition_path.with_suffix(".rows.csvtmp")
     try:
         # Транзиентный in-memory DuckDB-кодировщик: НЕ gdau.duckdb, НЕ DatabaseManager.
         conn = duckdb.connect()
@@ -137,11 +161,19 @@ def write_partition(
             cols_ddl = ", ".join(f'"{name}" VARCHAR' for name in storage_names)
             conn.execute(f"CREATE TABLE {_TMP_TABLE} ({cols_ddl})")
             # Пустой день → пропускаем вставку, схема уже задана CREATE TABLE (AC #7).
-            # (executemany c пустым списком в DuckDB бросает ошибку — поэтому именно гард.)
             if rows_list:
-                placeholders = ", ".join(["?"] * width)
-                conn.executemany(
-                    f"INSERT INTO {_TMP_TABLE} VALUES ({placeholders})", rows_list
+                # Построчный executemany в колоночный DuckDB катастрофически медленный на
+                # реальном объёме дня (сотни тысяч строк → десятки минут — вскрыто live-smoke
+                # 2.7). Грузим bulk: сериализуем строки в транзиентный CSV и читаем нативным
+                # параллельным read_csv (без pandas/pyarrow). Round-trip без искажений —
+                # см. _encode_csv_cell / _READ_CSV_OPTS.
+                with rows_csv_path.open("w", encoding="utf-8", newline="") as handle:
+                    for cells in rows_list:
+                        handle.write(",".join(_encode_csv_cell(c) for c in cells) + "\n")
+                # Путь — параметром (не SQL-литералом): ни инъекции, ни кавычек в корне (риск №1).
+                conn.execute(
+                    f"INSERT INTO {_TMP_TABLE} SELECT * FROM read_csv(?, {_READ_CSV_OPTS})",
+                    [rows_csv_path.as_posix()],
                 )
             # write_parquet по python-пути (не COPY '<sql-литерал>') — путь не попадает в
             # SQL: ни инъекции, ни проблем с кавычками в корне хранилища (риск №1).
@@ -154,19 +186,21 @@ def write_partition(
         # Windows тоже (AC #3, #4). Замена одного файла не трогает другие дни (FR-6/#10).
         os.replace(str(tmp_path), str(partition_path))
     except (OSError, duckdb.Error) as exc:
-        # DuckDB-сбой кодировщика (CREATE TABLE/executemany/write_parquet) бросает
+        # DuckDB-сбой кодировщика (CREATE TABLE/INSERT read_csv/write_parquet) бросает
         # duckdb.Error-подкласс (напр. IOException), который НЕ наследует OSError — ловим
-        # его наравне с OSError от os.replace, чтобы наружу шёл обещанный RuntimeError, а не
-        # сырой duckdb-трейсбек (паттерн database_manager.py).
+        # его наравне с OSError от os.replace/записи CSV, чтобы наружу шёл обещанный
+        # RuntimeError, а не сырой duckdb-трейсбек (паттерн database_manager.py).
         raise RuntimeError(
             f"Не удалось записать партицию {partition_path}: {exc}"
         ) from exc
     finally:
-        # Не оставлять частичный temp: при успехе .tmp уже подменён (его нет), при фейле —
-        # убираем. Перед записью .tmp путь резолвится без исключений, так что finally безопасен.
-        with contextlib.suppress(OSError):
-            if tmp_path.exists():
-                tmp_path.unlink()
+        # Не оставлять частичные temp-файлы (.parquet.tmp + .rows.csvtmp): при успехе .tmp
+        # уже подменён (его нет), CSV больше не нужен; при фейле — убираем оба. Пути
+        # резолвятся без исключений до записи, так что finally безопасен.
+        for leftover in (tmp_path, rows_csv_path):
+            with contextlib.suppress(OSError):
+                if leftover.exists():
+                    leftover.unlink()
 
     logger.info(
         "Записана партиция %s (%d строк, источник %s)",

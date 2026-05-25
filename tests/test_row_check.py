@@ -30,6 +30,7 @@ from scripts.utils.row_check import (
     RowCountMismatchError,
     count_part_rows,
     count_source_rows,
+    split_tsv_rows,
     verify_row_count,
 )
 
@@ -45,6 +46,36 @@ def _part(*data_rows: str, trailing_newline: bool = True, sep: str = "\n") -> st
     if trailing_newline:
         text += sep
     return text
+
+
+# --- Единый сплиттер split_tsv_rows: общий шов границ строк с p81 (defer 2.3) -----------
+
+
+def test_split_tsv_rows_keeps_header_and_data() -> None:
+    """Сплиттер отдаёт ВСЕ непустые строки части, включая заголовок (его вычитает счёт, не он)."""
+    assert split_tsv_rows(_part(_ROW1, _ROW2)) == [_HEADER, _ROW1, _ROW2]
+
+
+def test_split_tsv_rows_crlf_and_trailing_newline() -> None:
+    r"""``\r\n`` и хвостовой перевод строки не добавляют пустых записей (срез ``\r`` + фильтр пустых)."""
+    assert split_tsv_rows(_part(_ROW1, _ROW2, sep="\r\n")) == [_HEADER, _ROW1, _ROW2]
+    assert split_tsv_rows(_part(_ROW1, trailing_newline=False)) == [_HEADER, _ROW1]
+
+
+def test_split_tsv_rows_bytes_equals_str() -> None:
+    """``bytes``-вход (utf-8) даёт тот же список строк, что ``str``."""
+    text = _part(_ROW1, _ROW2)
+    assert split_tsv_rows(text.encode("utf-8")) == split_tsv_rows(text)
+
+
+def test_count_part_rows_is_split_minus_one_header() -> None:
+    """Контракт единого шва: ``count_part_rows`` == ``len(split_tsv_rows) − 1`` (defer 2.3).
+
+    Именно эта связь гарантирует, что счёт сверки и парсинг дня в p81 (2.7) согласованы по
+    границам строк — misfire off-by-N исключён по построению.
+    """
+    for part in (_part(_ROW1, _ROW2), _part(_ROW1, _ROW2, sep="\r\n"), _HEADER, ""):
+        assert count_part_rows(part) == max(0, len(split_tsv_rows(part)) - 1)
 
 
 # --- AC #3: заголовок исключён из счёта (нет off-by-one), счёт на уровне части ----------

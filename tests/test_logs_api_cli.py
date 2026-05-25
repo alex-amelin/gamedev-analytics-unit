@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import ast
+import importlib
 import logging
 import sys
 from datetime import date
@@ -30,6 +31,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import duckdb
 import pytest
 
 import scripts.tools.logs_api_cli as cli_mod
@@ -175,7 +177,8 @@ def test_help_lists_all_subcommands(capsys: pytest.CaptureFixture[str]) -> None:
     assert exc.value.code == 0
 
     out = capsys.readouterr().out
-    for name in ("create", "status", "download", "clean", "evaluate", "list", "info"):
+    # update (2.9) соседствует с lifecycle-подкомандами 1.6 (AC #4).
+    for name in ("create", "status", "download", "clean", "evaluate", "list", "info", "update"):
         assert name in out, f"подкоманда {name!r} не перечислена в --help"
 
 
@@ -658,3 +661,295 @@ def test_no_forbidden_imports() -> None:
 
     assert not heavy_offenders, f"тяжёлые импорты в logs_api_cli: {heavy_offenders}"
     assert not infra_offenders, f"инфра directaiq в logs_api_cli: {infra_offenders}"
+
+
+# === Подкоманда update (история 2.9) ========================================
+#
+# update — тонкая поверхность поверх готового диапазонного слоя p81 (2.8
+# ``ingest_range``). Вся тяжёлая механика (цикл дня/запись/сверка/лок/инкремент/
+# hot-window) живёт в p81 и здесь НЕ повторяется — offline-тесты мокают
+# ``p81.ingest_range`` целиком (без сети/лока/БД), проверяя ровно то, чем владеет
+# 2.9: argparse-поверхность (AC #4/#5), цикл по источникам (AC #1), агрегация кода
+# возврата и неподавление частичного сбоя (AC #2/#6), KeyboardInterrupt→чистый
+# выход (AC #7), resumable-подсказка (AC #8). p81 грузится через ``importlib``
+# (digit-префикс каталога ``8x_…`` → ``import`` statement = SyntaxError, риск #1) —
+# модуль кэшируется в ``sys.modules``, поэтому ссылка ниже == та, что увидит handler.
+
+_P81 = importlib.import_module("scripts.8x_metrica_logs_api.p81_load_logs")
+IngestRangeResult = _P81.IngestRangeResult
+
+
+class FakeIngestRange:
+    """Фейк ``p81.ingest_range``: фиксирует вызовы, отдаёт результат / бросает по источнику.
+
+    Подменяет реальную функцию на кэшированном модуле p81 (та же ссылка, что грузит
+    handler через ``import_module``) — handler зовёт именно фейк, без сети/лока/БД.
+    """
+
+    def __init__(
+        self,
+        *,
+        results: dict[str, Any] | None = None,
+        errors: dict[str, BaseException] | None = None,
+    ) -> None:
+        self._results = results or {}
+        self._errors = errors or {}
+        self.calls: list[tuple[str, str, str, int]] = []
+
+    def __call__(self, source: str, date1: str, date2: str, *, hot_window_days: int) -> Any:
+        self.calls.append((source, date1, date2, hot_window_days))
+        if source in self._errors:
+            raise self._errors[source]
+        return self._results.get(source, IngestRangeResult(source, [], [], 0))
+
+    @property
+    def sources_called(self) -> list[str]:
+        return [c[0] for c in self.calls]
+
+
+def _wire_update(monkeypatch: pytest.MonkeyPatch, fake: FakeIngestRange) -> None:
+    """Подменить ``ingest_range`` на кэшированном модуле p81 (== ссылка handler'а)."""
+    monkeypatch.setattr(_P81, "ingest_range", fake)
+
+
+# --- AC #4/#5: парсинг подкоманды update -------------------------------------
+
+
+def test_update_parser_defaults() -> None:
+    """``update`` без ``--source``/``--hot-window`` → default source=both, hot_window=None (AC #5)."""
+    parser = LogsApiCLI()._create_parser()
+    args = parser.parse_args(["update", "--date1", "2026-05-01", "--date2", "2026-05-02"])
+    assert args.command == "update"
+    assert args.source == "both"  # задокументированный дефолт, без молчаливого одного источника
+    assert args.hot_window is None  # None → handler возьмёт DEFAULT_HOT_WINDOW_DAYS
+
+
+def test_update_parser_explicit_source_and_hot_window() -> None:
+    """Явные ``--source hits``/``--hot-window 0`` пробрасываются как есть (AC #5, FR-11)."""
+    parser = LogsApiCLI()._create_parser()
+    args = parser.parse_args(
+        ["update", "--date1", "2026-05-01", "--date2", "2026-05-02",
+         "--source", "hits", "--hot-window", "0"]
+    )
+    assert args.source == "hits"
+    assert args.hot_window == 0
+
+
+def test_update_requires_dates() -> None:
+    """``--date1``/``--date2`` обязательны → без них argparse SystemExit(2) (AC #4)."""
+    parser = LogsApiCLI()._create_parser()
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(["update", "--date1", "2026-05-01"])
+    assert exc.value.code == 2
+
+
+def test_update_invalid_source_exit2(capsys: pytest.CaptureFixture[str]) -> None:
+    """``--source sessions`` (вне choices) → SystemExit(2), usage (AC #4/#5)."""
+    parser = LogsApiCLI()._create_parser()
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(
+            ["update", "--date1", "2026-05-01", "--date2", "2026-05-02", "--source", "sessions"]
+        )
+    assert exc.value.code == 2
+    assert "usage" in capsys.readouterr().err.lower()
+
+
+# --- AC #1: цикл по источникам + сводка + проброс аргументов ------------------
+
+
+def test_update_both_sources_success(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """both: ingest_range зван по каждому источнику с верными args, печать сводки, exit 0 (AC #1)."""
+    fake = FakeIngestRange(
+        results={
+            "visits": IngestRangeResult("visits", ["2026-05-20", "2026-05-21"], ["2026-05-19"], 100),
+            "hits": IngestRangeResult("hits", ["2026-05-21"], [], 50),
+        }
+    )
+    _wire_update(monkeypatch, fake)
+
+    _run(monkeypatch, ["update", "--date1", "2026-05-19", "--date2", "2026-05-21"])
+
+    # both → два вызова по порядку visits, hits; даты проброшены; hot_window = дефолт p81.
+    assert fake.sources_called == ["visits", "hits"]
+    assert fake.calls[0] == ("visits", "2026-05-19", "2026-05-21", _P81.DEFAULT_HOT_WINDOW_DAYS)
+    assert fake.calls[1] == ("hits", "2026-05-19", "2026-05-21", _P81.DEFAULT_HOT_WINDOW_DAYS)
+    out = capsys.readouterr().out
+    assert "visits: загружено 2 дн., пропущено 1 дн., строк 100" in out
+    assert "hits: загружено 1 дн., пропущено 0 дн., строк 50" in out
+
+
+def test_update_single_source_calls_once(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--source visits`` → ingest_range зван ровно раз для visits (AC #1)."""
+    fake = FakeIngestRange(results={"visits": IngestRangeResult("visits", ["2026-05-20"], [], 10)})
+    _wire_update(monkeypatch, fake)
+
+    _run(monkeypatch, ["update", "--date1", "2026-05-20", "--date2", "2026-05-20", "--source", "visits"])
+
+    assert fake.sources_called == ["visits"]
+    assert "visits: загружено 1 дн." in capsys.readouterr().out
+
+
+def test_update_hot_window_passed_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Явный ``--hot-window 7`` доходит до ingest_range как ``hot_window_days=7`` (FR-11)."""
+    fake = FakeIngestRange(results={"visits": IngestRangeResult("visits", [], [], 0)})
+    _wire_update(monkeypatch, fake)
+
+    _run(monkeypatch, ["update", "--date1", "2026-05-20", "--date2", "2026-05-20",
+                       "--source", "visits", "--hot-window", "7"])
+
+    assert fake.calls[0][3] == 7
+
+
+def test_update_imports_p81_via_importlib(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Диспетч update грузит digit-префикс модуль p81 через importlib без SyntaxError (риск #1).
+
+    Сам факт, что handler дошёл до фейк-``ingest_range`` (его вызвали), доказывает: модуль
+    ``scripts.8x_metrica_logs_api.p81_load_logs`` загрузился строкой, а не ``import``-statement.
+    """
+    fake = FakeIngestRange(results={"visits": IngestRangeResult("visits", [], [], 0)})
+    _wire_update(monkeypatch, fake)
+
+    _run(monkeypatch, ["update", "--date1", "2026-05-20", "--date2", "2026-05-20", "--source", "visits"])
+
+    assert fake.calls, "handler не дошёл до ingest_range — digit-префикс не загрузился"
+
+
+# --- AC #2/#6: агрегация кода возврата, частичный сбой не маскируется ---------
+
+
+def test_update_partial_failure_exit1_both_polled(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """visits падает, hits ок → оба опрошены, сводка обоих, SystemExit(1), resumable-подсказка (AC #2/#6/#8)."""
+    fake = FakeIngestRange(
+        results={"hits": IngestRangeResult("hits", ["2026-05-20"], [], 5)},
+        errors={"visits": RuntimeError("сверка строк не сошлась")},
+    )
+    _wire_update(monkeypatch, fake)
+    caplog.set_level(logging.ERROR)
+
+    with pytest.raises(SystemExit) as exc:
+        _run(monkeypatch, ["update", "--date1", "2026-05-20", "--date2", "2026-05-20"])
+    assert exc.value.code == 1
+    # Ключевое (AC #6): второй источник опрошен ДАЖЕ после сбоя первого.
+    assert fake.sources_called == ["visits", "hits"]
+    out = capsys.readouterr().out
+    assert "visits: ОШИБКА — сверка строк не сошлась" in out
+    assert "hits: загружено 1 дн." in out
+    assert "Повторите ту же команду" in out  # resumable-подсказка (AC #8)
+    assert "сверка строк не сошлась" in caplog.text  # сбой зафиксирован, не проглочен
+
+
+def test_update_all_sources_fail_exit1(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Оба источника падают → оба опрошены, SystemExit(1) (AC #2/#6)."""
+    fake = FakeIngestRange(
+        errors={"visits": RuntimeError("сбой visits"), "hits": ValueError("сбой hits")}
+    )
+    _wire_update(monkeypatch, fake)
+
+    with pytest.raises(SystemExit) as exc:
+        _run(monkeypatch, ["update", "--date1", "2026-05-20", "--date2", "2026-05-20"])
+    assert exc.value.code == 1
+    assert fake.sources_called == ["visits", "hits"]
+
+
+def test_update_fail_fast_caught_per_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail-fast ingest_range (лок занят / N<0 / нет кредов) ловится per-source → exit 1 без трейсбека (риск #3).
+
+    ``WriterLockHeldError``(``RuntimeError``)/``ValueError`` поднимаются ``ingest_range`` ДО сети
+    (валидация/clamp/lock) — для 2.9 это обычный per-source outcome, а не fatal в ``main``.
+    """
+    from scripts.utils.writer_lock import WriterLockHeldError
+
+    fake = FakeIngestRange(
+        errors={
+            "visits": WriterLockHeldError("хранилище занято другим писателем"),
+            "hits": ValueError("hot_window_days не может быть отрицательным"),
+        }
+    )
+    _wire_update(monkeypatch, fake)
+
+    with pytest.raises(SystemExit) as exc:
+        _run(monkeypatch, ["update", "--date1", "2026-05-20", "--date2", "2026-05-20"])
+    assert exc.value.code == 1
+    assert fake.sources_called == ["visits", "hits"]
+
+
+def test_update_duckdb_error_caught_per_source(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Сырой ``duckdb.Error`` из ingest_range ловится per-source → второй источник опрошен, exit 1 без трейсбека (AC #2/#4/#6).
+
+    ``duckdb.Error`` наследует ``Exception`` напрямую (НЕ ``RuntimeError``/``OSError``):
+    его бросают сырыми ``ensure_load_state_table``/``create_views``/``reconcile``/``mark_*``
+    внутри ``ingest_range`` при сбое БД/IO. Без явного перехвата он рвал бы цикл по источникам
+    (hits не опрошен — AC #6) и улетал трейсбеком в ``main`` (AC #2/#4). Регресс на код-ревью 2.9.
+    """
+    fake = FakeIngestRange(
+        results={"hits": IngestRangeResult("hits", ["2026-05-20"], [], 7)},
+        errors={"visits": duckdb.Error("повреждение базы данных")},
+    )
+    _wire_update(monkeypatch, fake)
+    caplog.set_level(logging.ERROR)
+
+    with pytest.raises(SystemExit) as exc:
+        _run(monkeypatch, ["update", "--date1", "2026-05-20", "--date2", "2026-05-20"])
+    assert exc.value.code == 1  # понятный ненулевой код, НЕ трейсбек (duckdb.Error пойман)
+    # Ключевое (AC #6): сбой БД на visits не отменил опрос hits.
+    assert fake.sources_called == ["visits", "hits"]
+    out = capsys.readouterr().out
+    assert "visits: ОШИБКА — повреждение базы данных" in out
+    assert "hits: загружено 1 дн." in out
+    assert "повреждение базы данных" in caplog.text  # зафиксирован, не проглочен
+
+
+def test_main_duckdb_error_clean_exit(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Сетка безопасности ``main``: ``duckdb.Error`` из _dispatch → SystemExit(1) + сообщение, без трейсбека (AC #2/#4).
+
+    Defense-in-depth: даже если ``duckdb.Error`` минует per-source перехват ``update``,
+    ``except`` в ``main`` обязан его поймать (он наследует ``Exception`` напрямую — раньше
+    не входил в кортеж ``(ValueError, RuntimeError, FileExistsError, OSError)``). Регресс 2.9.
+    """
+    def _boom(_self: object, _args: object) -> object:
+        raise duckdb.Error("сбой движка DuckDB")
+
+    monkeypatch.setattr(LogsApiCLI, "_dispatch", _boom)
+    caplog.set_level(logging.ERROR)
+
+    with pytest.raises(SystemExit) as exc:
+        _run(monkeypatch, ["info"])
+    assert exc.value.code == 1
+    assert "сбой движка DuckDB" in caplog.text
+
+
+# --- AC #7: KeyboardInterrupt не ловится per-source, чистый выход в main ------
+
+
+def test_update_keyboard_interrupt_exit130(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """KeyboardInterrupt из ingest_range → НЕ пойман per-source → main → SystemExit(130) + сообщение (AC #7).
+
+    Прерывание первого источника обрывает цикл (hits не опрашивается) — KeyboardInterrupt
+    наследует BaseException, не Exception, поэтому per-source ``except (ValueError, RuntimeError,
+    OSError)`` его не ловит; лок ingest_range снят ``finally`` контекст-менеджера.
+    """
+    fake = FakeIngestRange(errors={"visits": KeyboardInterrupt()})
+    _wire_update(monkeypatch, fake)
+    caplog.set_level(logging.ERROR)
+
+    with pytest.raises(SystemExit) as exc:
+        _run(monkeypatch, ["update", "--date1", "2026-05-20", "--date2", "2026-05-20"])
+    assert exc.value.code == 130
+    assert "Прервано" in caplog.text
+    assert fake.sources_called == ["visits"]  # цикл оборван — hits не опрошен

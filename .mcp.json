@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "gdau": {
+      "command": "uv",
+      "args": ["run", "python", "-m", "scripts.mcp.gdau_mcp_server"]
+    }
+  }
+}

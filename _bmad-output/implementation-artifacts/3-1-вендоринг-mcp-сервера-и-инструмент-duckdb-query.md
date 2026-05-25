@@ -1,6 +1,6 @@
 # Story 3.1: Вендоринг MCP-сервера и инструмент `duckdb_query`
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -60,49 +60,61 @@ so that выполнять произвольный SQL к данным игры
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Ядро `scripts/mcp/tools/core.py` (вендоринг тонкого среза; AC #2/#4/#6/#7/#9/#10/#11)**
-  - [ ] Шапка-пометка вендоринга: `# vendored from directaiq @ <ref> (scripts/mcp/tools/core.py), seam: read-only + statement-guard; trimmed: config_manager/placeholders/context/schema/export/audit/Direct-VAT-semantics → 3.2/3.3`.
-  - [ ] **Форматтеры** (перенести verbatim, переименовать брендинг): `format_result_json`, `format_result_markdown`, `format_result_csv` (`columns, rows, limit`). JSON несёт `total_rows`/`has_more`/`next_offset` (для усечения по лимиту, риск №5).
-  - [ ] **`_format_sql_error(e, query) -> str`** (перенести verbatim) — классификация (`does not exist`→подсказка `--tables`/`--schema` будут в 3.2; `syntax error`; `type mismatch`; `division by zero`).
-  - [ ] **Statement-guard `_reject_if_not_readonly(sql) -> str | None`** (новое, риск №1): **сначала срезать ведущие комментарии** (`-- …\n` и `/* … */`) И пробелы, потом смотреть ведущее слово — иначе `'/* x */ COPY (…) TO …'`/`'-- c\nCOPY …'` обойдут allowlist (проверено вживую: под read_only такой запрос ПИШЕТ файл). Срезать хвостовой `;`; если ещё есть `;` → отказ (один стейтмент). Ведущее ключевое слово не в allowlist (`SELECT/WITH/FROM/DESCRIBE/EXPLAIN/SHOW/VALUES/SUMMARIZE/TABLE/PIVOT/UNPIVOT`) → отказ с понятным текстом «канал только для чтения, операция X запрещена». Регистронезависимо.
-  - [ ] **`_clamp_limit(limit) -> int`** (новое, риск №5/AC #10): `≤0 → DEFAULT_LIMIT`; `> MAX_LIMIT → MAX_LIMIT`; константы `DEFAULT_LIMIT`/`MAX_LIMIT` модульными.
-  - [ ] **`execute_query(query, output_format="json", limit=DEFAULT_LIMIT) -> str`** (адаптировать directaiq):
-    - [ ] guard записи (риск №1) → если отказ, вернуть его сразу (до открытия соединения).
-    - [ ] `display_limit = _clamp_limit(limit)`; нормализовать `output_format` (не в {json,markdown,csv} → `json`, AC #4/#10).
-    - [ ] `with DatabaseManager.connection(read_only=True) as conn:` (2.1; до создания БД → `RuntimeError` с текстом про `gdau-logs update`, AC #8 — **не** глушить, пробросить как понятную ошибку).
-    - [ ] **таймаут (риск №2/AC #11):** `timer = threading.Timer(STATEMENT_TIMEOUT_S, conn.interrupt); timer.start()`; `try: conn.execute(...).fetchall() finally: timer.cancel()`.
-    - [ ] **retry (риск №4/AC #9):** обернуть исполнение в однократный повтор на `duckdb.IOException` (или транзиентный `duckdb.Error` по сигнатуре чтения parquet) с `time.sleep(0.1)`; синтаксис/каталог НЕ ретраить.
-    - [ ] `if conn.description is None: return "_Запрос выполнен (без результата)_"`; иначе форматировать по `output_format`.
-    - [ ] `except duckdb.InterruptException → "запрос превысил лимит времени …"`; `except duckdb.Error → _format_sql_error`; `except Exception → "**Error:** {type}: {msg}"` (риск №6 — наружу не выпускать).
-  - [ ] **`handle_query(query, output_format="json", limit=DEFAULT_LIMIT) -> str`** (входная точка): `query = (query or "").strip()`; пустой → подсказка «дай SQL-запрос …» (AC #10). В 3.1 — **только** `return execute_query(query, output_format, limit)` (без роутинга спец-команд; их добавит 3.2 поверх этой же функции).
-- [ ] **Task 2 — Сервер `scripts/mcp/gdau_mcp_server.py` (вендоринг + развязка; AC #1/#3/#5)**
-  - [ ] Шапка-пометка вендоринга (как Task 1).
-  - [ ] **Bootstrap `.env` (риск №3):** в шапке (до импортов `scripts.*`) `from dotenv import find_dotenv, load_dotenv; load_dotenv(find_dotenv(usecwd=True), override=False)` ([[dotenv-usecwd-gotcha]]/[[mcp-env-delivery]]). При необходимости — `sys.path.insert(0, project_root)` (как directaiq; под `uv run` обычно не нужно — проверить).
-  - [ ] `from mcp.server.fastmcp import FastMCP`; `from mcp.types import ToolAnnotations`; `from pydantic import Field`; `from scripts.mcp.tools.core import handle_query`. **`mcp = FastMCP("gdau_mcp")`** (брендинг gdau, AC #5).
-  - [ ] **`@mcp.tool(name="duckdb_query", annotations=ToolAnnotations(title="DuckDB Query", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))`** — `readOnlyHint=True` (в 3.1 экспорта нет → канал чисто читающий; в directaiq был `False` из-за `--export`).
-    - [ ] **mypy strict + `@mcp.tool`:** под `strict=true` включён `disallow_untyped_decorators`; если SDK-декоратор `@mcp.tool` придёт нетипизированным/`Any` → допустим точечный `# type: ignore[misc]` **на строке декоратора** с комментарием-почему (SDK-декоратор не несёт типов). НЕ ослаблять strict глобально и НЕ добавлять стаб для `mcp`. Если ignore не понадобился — не добавлять.
-  - [ ] `def duckdb_query(query: Annotated[str, Field(...)], format: Annotated[Literal["json","markdown","csv"], Field(default="json", ...)]="json", limit: Annotated[int, Field(default=…, ge=0, ...)]=…) -> str:` → `return handle_query(query, format, limit)`. **Docstring под нашу схему:** упомянуть view'ы `visits`/`hits`, snake_case-колонки, что канал только для чтения; **НЕ** рекламировать `--context/--tables/--schema/--sample/--export` (их нет в 3.1) и НЕ упоминать Direct/НДС/goal-плейсхолдеры/`t10_*`/`t18_*`.
-  - [ ] `if __name__ == "__main__": mcp.run()`. **НЕ** вендорить `_save_audit_log`/`get_mcp_output_dir` (3.2) и `scripts/mcp/utils/common.py` (config_manager).
-  - [ ] `scripts/mcp/tools/__init__.py` — завести пакет (как у directaiq, минимальный docstring).
-- [ ] **Task 3 — `.mcp.json` (регистрация; AC #1)**
-  - [ ] В корне dev-репо `.mcp.json`: `{"mcpServers":{"gdau":{"command":"uv","args":["run","python","-m","scripts.mcp.gdau_mcp_server"]}}}` — кросс-платформенно (не `bash`/`activate.sh` как directaiq), `python -m scripts.mcp.gdau_mcp_server` (architecture.md:507). `.mcp.json` симлинкуется в хранилище контрактом 4.1 → запускается с cwd хранилища (там `.env`/`pyproject.toml`-симлинк). Финальную форму лаунчера допустимо уточнить в init 4.3 — 3.1 поставляет рабочую `uv run python -m`-форму.
-- [ ] **Task 4 — Спека `docs/mcp-query.md` (новый компонент; часть DoD)**
-  - [ ] Человеческим языком (3 вопроса project-context): **что делает** (агент шлёт SQL/формат/лимит → таблица/json/csv по view'ам `visits`/`hits`); **зачем** (канал чтения/анализа, замыкает «спросил → ответ в ту же сессию», SM-1/UJ-3); **контракт с другими** (read-only к `gdau.duckdb` 2.1, view'ы 2.6, лок писателя не берёт 2.5; до первой выгрузки → подсказка `gdau-logs update`; только чтение — запись отклоняется). Отметить, что сервисные команды/контекст/семантика — следующие истории (3.2/3.3).
-- [ ] **Task 5 — Offline-тесты `tests/test_mcp_core.py` (ядро) + `tests/test_gdau_mcp_server.py` (сервер)**
-  - [ ] Фикстура: `tmp_path` + `monkeypatch.setenv(DATA_ROOT_ENV, …)`; создать `gdau.duckdb` write-conn'ом + пару view'ов/таблиц (можно `views.create_views` поверх tmp-партиции parquet, либо простую таблицу — для SQL-исполнения достаточно). MCP читает read-only.
-  - [ ] **AC #2/#4:** `SELECT` отдаёт строки в json/markdown/csv; формат уважается.
-  - [ ] **AC #6:** битый SQL (`SELEC * FORM x`) → строка с `**SQL Error**`, исключение не вылетает.
-  - [ ] **AC #7 (двух-слойно):** `INSERT`/`CREATE`/`DROP` → отказ; `COPY (SELECT …) TO 'f.csv'` → **отказ guard'ом** (и файл НЕ создан); `PRAGMA …`/`ATTACH …`/`SET …`/`INSTALL …` → отказ; мульти-стейтмент `SELECT 1; COPY … TO …` → отказ; **comment-bypass `'/* x */ COPY (…) TO …'` и `'-- c\nCOPY (…) TO …'` → отказ** (единственный найденный путь обхода allowlist — зацементировать тестом). (Проверить именно guard, т.к. read-only сам `COPY TO`/`PRAGMA` пропускает — риск №1.)
-  - [ ] **AC #8:** хранилище без `gdau.duckdb` → `handle_query("SELECT 1")` отдаёт понятное сообщение про `gdau-logs update` (не сырой `IOException`).
-  - [ ] **AC #9:** monkeypatch `conn.execute` бросить `duckdb.IOException` один раз, потом успех → один retry → результат; бросать дважды → классифицированная ошибка (один повтор, не бесконечный).
-  - [ ] **AC #10:** пустой/`"   "`/`None` query → подсказка; `limit=0`/`-5` → `DEFAULT_LIMIT`; `limit=10**9` → `MAX_LIMIT`; неизвестный format → json.
-  - [ ] **AC #11:** runaway (`SELECT count(*) FROM range(1e12) a, range(1e12) b` или генератор) с малым `STATEMENT_TIMEOUT_S` (инъекция/monkeypatch) → `duckdb.InterruptException` → сообщение про лимит времени; таймер отменяется на быстром запросе (нет ложного прерывания).
-  - [ ] **AC #1/#3/#5 (сервер):** модуль импортируется и регистрирует инструмент `duckdb_query`; `FastMCP("gdau_mcp")`; **ast/import-анти-зависимость**: в `scripts/mcp/**` нет импорта `config_manager`/`auth_manager`/`directaiq`/`scripts.mcp.utils.common` (как `test_database_manager.py` проверяет вырезанную инфру по узлам импорта, не подстрокой); соединение открывается `read_only=True` (проверить, что `DatabaseManager.connection` зовётся с `read_only=True` — напр. monkeypatch-шпион).
-- [ ] **Гейты перед сдачей**
-  - [ ] `uv run mypy scripts` → зелено (config `strict=true`; новые `scripts/mcp/gdau_mcp_server.py` + `scripts/mcp/tools/core.py` + `__init__.py`; type hints везде, без `Any`-дыр; аннотации FastMCP/pydantic типизированы). CI гоняет `mypy scripts` на матрице **ubuntu+windows** (.github/workflows/tests.yml); локально на win32 полезен доп. кросс-чек `mypy scripts --platform linux` (ловит `sys.platform`-ветки — у 3.1 их нет, но это house-convention).
-  - [ ] `uv run pytest` (offline) → зелено; маркер `live` не вводится (см. ниже).
-  - [ ] `uv.lock` не менялся (`mcp>=1.2` уже в зависимостях; `pydantic` — транзитив `mcp`; `python-dotenv`/`duckdb` уже есть). Если mypy потребует стаб для `mcp`/`pydantic` — это сигнал к обсуждению, не молча добавлять зависимость.
-  - [ ] Чек-лист «Definition of Done» пройден.
+- [x] **Task 1 — Ядро `scripts/mcp/tools/core.py` (вендоринг тонкого среза; AC #2/#4/#6/#7/#9/#10/#11)**
+  - [x] Шапка-пометка вендоринга: `# vendored from directaiq @ <ref> (scripts/mcp/tools/core.py), seam: read-only + statement-guard; trimmed: config_manager/placeholders/context/schema/export/audit/Direct-VAT-semantics → 3.2/3.3`.
+  - [x] **Форматтеры** (перенести verbatim, переименовать брендинг): `format_result_json`, `format_result_markdown`, `format_result_csv` (`columns, rows, limit`). JSON несёт `total_rows`/`has_more`/`next_offset` (для усечения по лимиту, риск №5).
+  - [x] **`_format_sql_error(e, query) -> str`** (перенести verbatim) — классификация (`does not exist`→подсказка `--tables`/`--schema` будут в 3.2; `syntax error`; `type mismatch`; `division by zero`).
+  - [x] **Statement-guard `_reject_if_not_readonly(sql) -> str | None`** (новое, риск №1): **сначала срезать ведущие комментарии** (`-- …\n` и `/* … */`) И пробелы, потом смотреть ведущее слово — иначе `'/* x */ COPY (…) TO …'`/`'-- c\nCOPY …'` обойдут allowlist (проверено вживую: под read_only такой запрос ПИШЕТ файл). Срезать хвостовой `;`; если ещё есть `;` → отказ (один стейтмент). Ведущее ключевое слово не в allowlist (`SELECT/WITH/FROM/DESCRIBE/EXPLAIN/SHOW/VALUES/SUMMARIZE/TABLE/PIVOT/UNPIVOT`) → отказ с понятным текстом «канал только для чтения, операция X запрещена». Регистронезависимо.
+  - [x] **`_clamp_limit(limit) -> int`** (новое, риск №5/AC #10): `≤0 → DEFAULT_LIMIT`; `> MAX_LIMIT → MAX_LIMIT`; константы `DEFAULT_LIMIT`/`MAX_LIMIT` модульными.
+  - [x] **`execute_query(query, output_format="json", limit=DEFAULT_LIMIT) -> str`** (адаптировать directaiq):
+    - [x] guard записи (риск №1) → если отказ, вернуть его сразу (до открытия соединения).
+    - [x] `display_limit = _clamp_limit(limit)`; нормализовать `output_format` (не в {json,markdown,csv} → `json`, AC #4/#10).
+    - [x] `with DatabaseManager.connection(read_only=True) as conn:` (2.1; до создания БД → `RuntimeError` с текстом про `gdau-logs update`, AC #8 — **не** глушить, пробросить как понятную ошибку).
+    - [x] **таймаут (риск №2/AC #11):** `timer = threading.Timer(STATEMENT_TIMEOUT_S, conn.interrupt); timer.start()`; `try: conn.execute(...).fetchall() finally: timer.cancel()`.
+    - [x] **retry (риск №4/AC #9):** обернуть исполнение в однократный повтор на `duckdb.IOException` (или транзиентный `duckdb.Error` по сигнатуре чтения parquet) с `time.sleep(0.1)`; синтаксис/каталог НЕ ретраить.
+    - [x] `if conn.description is None: return "_Запрос выполнен (без результата)_"`; иначе форматировать по `output_format`.
+    - [x] `except duckdb.InterruptException → "запрос превысил лимит времени …"`; `except duckdb.Error → _format_sql_error`; `except Exception → "**Error:** {type}: {msg}"` (риск №6 — наружу не выпускать).
+  - [x] **`handle_query(query, output_format="json", limit=DEFAULT_LIMIT) -> str`** (входная точка): `query = (query or "").strip()`; пустой → подсказка «дай SQL-запрос …» (AC #10). В 3.1 — **только** `return execute_query(query, output_format, limit)` (без роутинга спец-команд; их добавит 3.2 поверх этой же функции).
+- [x] **Task 2 — Сервер `scripts/mcp/gdau_mcp_server.py` (вендоринг + развязка; AC #1/#3/#5)**
+  - [x] Шапка-пометка вендоринга (как Task 1).
+  - [x] **Bootstrap `.env` (риск №3):** в шапке (до импортов `scripts.*`) `from dotenv import find_dotenv, load_dotenv; load_dotenv(find_dotenv(usecwd=True), override=False)` ([[dotenv-usecwd-gotcha]]/[[mcp-env-delivery]]). При необходимости — `sys.path.insert(0, project_root)` (как directaiq; под `uv run` обычно не нужно — проверить).
+  - [x] `from mcp.server.fastmcp import FastMCP`; `from mcp.types import ToolAnnotations`; `from pydantic import Field`; `from scripts.mcp.tools.core import handle_query`. **`mcp = FastMCP("gdau_mcp")`** (брендинг gdau, AC #5).
+  - [x] **`@mcp.tool(name="duckdb_query", annotations=ToolAnnotations(title="DuckDB Query", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False))`** — `readOnlyHint=True` (в 3.1 экспорта нет → канал чисто читающий; в directaiq был `False` из-за `--export`).
+    - [x] **mypy strict + `@mcp.tool`:** под `strict=true` включён `disallow_untyped_decorators`; если SDK-декоратор `@mcp.tool` придёт нетипизированным/`Any` → допустим точечный `# type: ignore[misc]` **на строке декоратора** с комментарием-почему (SDK-декоратор не несёт типов). НЕ ослаблять strict глобально и НЕ добавлять стаб для `mcp`. Если ignore не понадобился — не добавлять.
+  - [x] `def duckdb_query(query: Annotated[str, Field(...)], format: Annotated[Literal["json","markdown","csv"], Field(default="json", ...)]="json", limit: Annotated[int, Field(default=…, ge=0, ...)]=…) -> str:` → `return handle_query(query, format, limit)`. **Docstring под нашу схему:** упомянуть view'ы `visits`/`hits`, snake_case-колонки, что канал только для чтения; **НЕ** рекламировать `--context/--tables/--schema/--sample/--export` (их нет в 3.1) и НЕ упоминать Direct/НДС/goal-плейсхолдеры/`t10_*`/`t18_*`.
+  - [x] `if __name__ == "__main__": mcp.run()`. **НЕ** вендорить `_save_audit_log`/`get_mcp_output_dir` (3.2) и `scripts/mcp/utils/common.py` (config_manager).
+  - [x] `scripts/mcp/tools/__init__.py` — завести пакет (как у directaiq, минимальный docstring).
+- [x] **Task 3 — `.mcp.json` (регистрация; AC #1)**
+  - [x] В корне dev-репо `.mcp.json`: `{"mcpServers":{"gdau":{"command":"uv","args":["run","python","-m","scripts.mcp.gdau_mcp_server"]}}}` — кросс-платформенно (не `bash`/`activate.sh` как directaiq), `python -m scripts.mcp.gdau_mcp_server` (architecture.md:507). `.mcp.json` симлинкуется в хранилище контрактом 4.1 → запускается с cwd хранилища (там `.env`/`pyproject.toml`-симлинк). Финальную форму лаунчера допустимо уточнить в init 4.3 — 3.1 поставляет рабочую `uv run python -m`-форму.
+- [x] **Task 4 — Спека `docs/mcp-query.md` (новый компонент; часть DoD)**
+  - [x] Человеческим языком (3 вопроса project-context): **что делает** (агент шлёт SQL/формат/лимит → таблица/json/csv по view'ам `visits`/`hits`); **зачем** (канал чтения/анализа, замыкает «спросил → ответ в ту же сессию», SM-1/UJ-3); **контракт с другими** (read-only к `gdau.duckdb` 2.1, view'ы 2.6, лок писателя не берёт 2.5; до первой выгрузки → подсказка `gdau-logs update`; только чтение — запись отклоняется). Отметить, что сервисные команды/контекст/семантика — следующие истории (3.2/3.3).
+- [x] **Task 5 — Offline-тесты `tests/test_mcp_core.py` (ядро) + `tests/test_gdau_mcp_server.py` (сервер)**
+  - [x] Фикстура: `tmp_path` + `monkeypatch.setenv(DATA_ROOT_ENV, …)`; создать `gdau.duckdb` write-conn'ом + пару view'ов/таблиц (можно `views.create_views` поверх tmp-партиции parquet, либо простую таблицу — для SQL-исполнения достаточно). MCP читает read-only.
+  - [x] **AC #2/#4:** `SELECT` отдаёт строки в json/markdown/csv; формат уважается.
+  - [x] **AC #6:** битый SQL (`SELEC * FORM x`) → строка с `**SQL Error**`, исключение не вылетает.
+  - [x] **AC #7 (двух-слойно):** `INSERT`/`CREATE`/`DROP` → отказ; `COPY (SELECT …) TO 'f.csv'` → **отказ guard'ом** (и файл НЕ создан); `PRAGMA …`/`ATTACH …`/`SET …`/`INSTALL …` → отказ; мульти-стейтмент `SELECT 1; COPY … TO …` → отказ; **comment-bypass `'/* x */ COPY (…) TO …'` и `'-- c\nCOPY (…) TO …'` → отказ** (единственный найденный путь обхода allowlist — зацементировать тестом). (Проверить именно guard, т.к. read-only сам `COPY TO`/`PRAGMA` пропускает — риск №1.)
+  - [x] **AC #8:** хранилище без `gdau.duckdb` → `handle_query("SELECT 1")` отдаёт понятное сообщение про `gdau-logs update` (не сырой `IOException`).
+  - [x] **AC #9:** monkeypatch `conn.execute` бросить `duckdb.IOException` один раз, потом успех → один retry → результат; бросать дважды → классифицированная ошибка (один повтор, не бесконечный).
+  - [x] **AC #10:** пустой/`"   "`/`None` query → подсказка; `limit=0`/`-5` → `DEFAULT_LIMIT`; `limit=10**9` → `MAX_LIMIT`; неизвестный format → json.
+  - [x] **AC #11:** runaway (`SELECT count(*) FROM range(1e12) a, range(1e12) b` или генератор) с малым `STATEMENT_TIMEOUT_S` (инъекция/monkeypatch) → `duckdb.InterruptException` → сообщение про лимит времени; таймер отменяется на быстром запросе (нет ложного прерывания).
+  - [x] **AC #1/#3/#5 (сервер):** модуль импортируется и регистрирует инструмент `duckdb_query`; `FastMCP("gdau_mcp")`; **ast/import-анти-зависимость**: в `scripts/mcp/**` нет импорта `config_manager`/`auth_manager`/`directaiq`/`scripts.mcp.utils.common` (как `test_database_manager.py` проверяет вырезанную инфру по узлам импорта, не подстрокой); соединение открывается `read_only=True` (проверить, что `DatabaseManager.connection` зовётся с `read_only=True` — напр. monkeypatch-шпион).
+- [x] **Гейты перед сдачей**
+  - [x] `uv run mypy scripts` → зелено (config `strict=true`; новые `scripts/mcp/gdau_mcp_server.py` + `scripts/mcp/tools/core.py` + `__init__.py`; type hints везде, без `Any`-дыр; аннотации FastMCP/pydantic типизированы). CI гоняет `mypy scripts` на матрице **ubuntu+windows** (.github/workflows/tests.yml); локально на win32 полезен доп. кросс-чек `mypy scripts --platform linux` (ловит `sys.platform`-ветки — у 3.1 их нет, но это house-convention).
+  - [x] `uv run pytest` (offline) → зелено; маркер `live` не вводится (см. ниже).
+  - [x] `uv.lock` не менялся (`mcp>=1.2` уже в зависимостях; `pydantic` — транзитив `mcp`; `python-dotenv`/`duckdb` уже есть). Если mypy потребует стаб для `mcp`/`pydantic` — это сигнал к обсуждению, не молча добавлять зависимость.
+  - [x] Чек-лист «Definition of Done» пройден.
+
+### Review Findings
+
+_Code-review 2026-05-25 (3 слоя Opus: Blind Hunter / Edge Case Hunter / Acceptance Auditor). Все 11 AC — PASS; гейты перепрогнаны зелёными (mypy strict 22 файла, pytest MCP 30 passed, `uv.lock`/`pyproject.toml` не менялись). 4 patch / 0 decision / 3 defer / 9 dismiss._
+
+- [x] [Review][Patch] **`EXPLAIN ANALYZE COPY (…) TO 'file'` обходит read-only guard (нарушение AC #7)** [scripts/mcp/tools/core.py:63,98] — `EXPLAIN` в allowlist ведущих слов, поэтому `_reject_if_not_readonly` пропускает запрос; эмпирически подтверждено (DuckDB 1.5.3): `EXPLAIN ANALYZE COPY (SELECT * FROM visits) TO 'leak.csv'` **пишет файл** под `read_only=True` (тогда как `EXPLAIN COPY` без ANALYZE — нет). Это ровно тот вектор записи через read-канал, который AC #7 обязан закрыть. Фикс: после извлечения ведущего слова срезать префикс `EXPLAIN [ANALYZE]` и валидировать ведущее слово **вложенного** стейтмента против allowlist (`EXPLAIN SELECT` → ок; `EXPLAIN ANALYZE COPY` → отказ). Источник: Edge Case Hunter (High, верифицировано в ревью). **✅ Исправлено 2026-05-25:** regex-срез `EXPLAIN [ANALYZE]` перед проверкой allowlist + регресс-тест `test_guard_rejects_explain_analyze_copy_and_no_file_written` (отказ + файл не создан) + `EXPLAIN SELECT`/`EXPLAIN ANALYZE SELECT` добавлены в allow-набор.
+- [x] [Review][Patch] **CSV: строка заголовка не квотируется по RFC4180** [scripts/mcp/tools/core.py:219] — значения квотируются (`,`/`"`/`\n`), а заголовок `",".join(columns)` — нет. Колонка-алиас с запятой/кавычкой (`SELECT 1 AS "a,b"`) ломает соответствие числа колонок шапки и строк. Источник: Blind Hunter (Low). **✅ Исправлено 2026-05-25:** общий хелпер `_csv_quote` применён к заголовку И значениям (+ `\r`); тест `test_csv_header_is_rfc4180_quoted`.
+- [x] [Review][Patch] **Markdown: заголовок не экранирует `|`** [scripts/mcp/tools/core.py:160] — значения экранируют `|` (стр. 173), заголовок `" | ".join(columns)` — нет. Колонка-алиас с `|` вставляет лишний разделитель в шапку → таблица разъезжается. Источник: Blind Hunter (Low). **✅ Исправлено 2026-05-25:** хелпер `_md_escape` применён к заголовку; тест `test_markdown_header_escapes_pipe`.
+- [x] [Review][Patch] **Markdown: значение ячейки со встроенным `\n` ломает однострочность ряда** [scripts/mcp/tools/core.py:170-174] — экранируется только `|`, перевод строки в значении (свободный текст/referer) — нет → один логический ряд разрывается на несколько физических строк. CSV-путь это квотирует (стр. 227), markdown — нет. Источник: Edge Case Hunter (Low). **✅ Исправлено 2026-05-25:** `_md_escape` заменяет `\r`/`\n` на пробел; тест `test_markdown_cell_newline_does_not_break_row`.
+- [x] [Review][Defer] **Лимит применяется после полного `fetchall()` — нет защиты памяти на огромных результатах** [scripts/mcp/tools/core.py:284] — deferred: `MAX_LIMIT` ограничивает только ответ агенту (намерение риска №5 — display-cap, выполнено), но `SELECT * FROM hits` материализует все строки в память до усечения; реальная защита больших результатов = авто-экспорт >500, осознанно отнесён к 3.2.
+- [x] [Review][Defer] **Retry переиспользует то же соединение + даёт свежий таймаут (≈2× в худшем) + узкая гонка interrupt→retry** [scripts/mcp/tools/core.py:313-322] — deferred: AC #9 «однократный повтор» соблюдён; повтор на том же `conn` после `IOException` может (а) дать суммарно ~60 c при двух почти-таймаутах и (б) в крайне узком окне (таймер выстрелил на границе) словить InterruptException на retry → ложное «превысил лимит». Низкоприоритетное упрочнение (свежий conn на повтор) — узкая гонка.
+- [x] [Review][Defer] **Два теста AC #11 используют 0.5 c wall-clock-бюджет → риск флака на нагруженном CI** [tests/test_mcp_core.py] — deferred: `test_fast_query_not_interrupted`/`test_runaway_query_interrupted_by_timeout` завязаны на стенные 0.5 c; на загруженном раннере быстрый запрос может перевалить бюджет (ложное прерывание). Упрочнение — расширить запас по времени.
 
 ## Dev Notes
 
@@ -177,11 +189,52 @@ so that выполнять произвольный SQL к данным игры
 
 ### Agent Model Used
 
+claude-opus-4-7[1m] (Claude Opus 4.7, 1M context) — dev-story workflow.
+
 ### Debug Log References
+
+Эмпирическая проверка фактов DuckDB 1.5.3 (грунт под AC #7/#11), воспроизведено в этой сессии:
+
+- `read_only=True`: `CREATE`/`INSERT`/`DROP` → `InvalidInputException` (блок), но `COPY (SELECT…) TO 'file'` **пишет файл** и `PRAGMA …` **проходит** → одного `read_only` мало, statement-guard обязателен.
+- `SET/PRAGMA statement_timeout` → `CatalogException: unrecognized configuration parameter` (не существует) → таймаут через `threading.Timer` + `conn.interrupt()` (метод есть).
+- `InterruptException`/`IOException` — подклассы `duckdb.Error` → `except InterruptException` стоит ДО `except duckdb.Error`.
+- Watchdog проверен на «убегающем» cross join `range(1e9)×range(1e9)`: быстрый запрос (`SELECT 1`) не прерывается, runaway прерывается через ~0.6 c при `timeout=0.5`.
+- mypy strict: `@mcp.tool`-декоратор SDK типизирован → `# type: ignore[misc]` НЕ понадобился (не добавлен).
+
+Одна правка по ходу тестов: guard режет опечатку ведущего слова (`SELEC …`) как операцию не из allowlist (корректный fail-closed) — тест AC #6 переведён на `SELECT * FORM visits` (валидное ведущее слово SELECT проходит guard, падает уже в парсере движка).
 
 ### Completion Notes List
 
+Реализован **вариант A — тонкий read-канал** (скоуп подтверждён Шефом): сервер `FastMCP("gdau_mcp")` + единый инструмент `duckdb_query(query, format, limit)` → `handle_query` → `execute_query` поверх read-only соединения `gdau.duckdb` (2.1) и view'ов `visits`/`hits` (2.6).
+
+- **AC #1/#5:** сервер на офиц. `mcp` SDK (`mcp.server.fastmcp.FastMCP`), регистрация через `.mcp.json` (`uv run python -m scripts.mcp.gdau_mcp_server`); брендинг `gdau`, **без** `config_manager`/`auth_manager`/`directaiq_*` (закреплено ast-анти-зависимостью по import-узлам).
+- **AC #2/#4:** произвольный SQL → результат в `json`/`markdown`/`csv`; неизвестный формат в ядре → дефолт `json` (на инструменте отсекается `Literal`-типом).
+- **AC #3/#7 (read-only двумя слоями):** соединение `read_only=True` + statement-guard `_reject_if_not_readonly` (allowlist ведущего слова + срез ведущих комментариев + запрет мульти-стейтмента). Режет `COPY … TO`/`PRAGMA`/`SET`/`ATTACH`/`INSTALL`/`LOAD`/`INSERT`/`CREATE`/`DROP`/… и comment-bypass `/* */ COPY`/`-- \nCOPY` (единственный найденный путь обхода). `.writer.lock` не берётся.
+- **AC #6:** все ошибки ловятся внутри `core.py` и возвращаются строкой (`_format_sql_error`/`**Error:**`) — сервер не падает.
+- **AC #8:** запрос до первой выгрузки → `RuntimeError` «… запусти gdau-logs update» из `DatabaseManager` ловится и отдаётся понятным текстом, не сырой `IOException`.
+- **AC #9:** однократный retry на `duckdb.IOException` (гонка `os.replace` партиции); синтаксис/каталог не ретраятся.
+- **AC #10:** пустой/`None`/из пробелов query → подсказка; `_clamp_limit` → `[1, MAX_LIMIT]` (`DEFAULT_LIMIT=100`, `MAX_LIMIT=10000`).
+- **AC #11:** watchdog `threading.Timer` + `conn.interrupt()` → `InterruptException` → сообщение про лимит времени.
+
+`docs/mcp-query.md` заведён (что/зачем/контракт + границы 3.2/3.3 + ручной smoke). Тесты: `tests/test_mcp_core.py` (24) + `tests/test_gdau_mcp_server.py` (6) — 30 новых.
+
+Гейты зелёные: `mypy scripts` strict win32 + `--platform linux` (22 файла), `uv run pytest` 363 passed / 8 live deselected (было 333), `uv.lock`/`pyproject.toml` не менялись. Live неприменим (MCP-чтение в Logs API не ходит — читает локальный `gdau.duckdb`).
+
+Изменения НЕ закоммичены — ветка `story/3.1-mcp-server` ждёт code-review и merge в `main` по workflow.
+
 ### File List
+
+- `scripts/mcp/gdau_mcp_server.py` (новый) — сервер `FastMCP("gdau_mcp")`, инструмент `duckdb_query`, `.env`-bootstrap.
+- `scripts/mcp/tools/__init__.py` (новый) — пакет инструментов.
+- `scripts/mcp/tools/core.py` (новый) — `handle_query`/`execute_query`, форматтеры, statement-guard, кламп лимита, watchdog-таймаут, retry, классификатор ошибок.
+- `.mcp.json` (новый) — регистрация сервера `gdau` (`uv run python -m scripts.mcp.gdau_mcp_server`).
+- `docs/mcp-query.md` (новый) — спека компонента MCP-чтения.
+- `tests/test_mcp_core.py` (новый) — offline-тесты ядра (AC #2/#4/#6/#7/#8/#9/#10/#11 + read-only spy).
+- `tests/test_gdau_mcp_server.py` (новый) — offline-тесты сервера (AC #1/#3/#5 + ast-анти-зависимость).
+
+## Change Log
+
+- 2026-05-25 — dev-story: реализован вариант A (тонкий read-канал). Новые `scripts/mcp/gdau_mcp_server.py` + `scripts/mcp/tools/core.py` + `tools/__init__.py` + `.mcp.json` + `docs/mcp-query.md`; +30 offline-тестов. Все 11 AC закрыты; гейты зелёные (mypy strict win32+linux 22 файла, pytest 363/8); `uv.lock` не менялся. Status: ready-for-dev → review.
 
 ## Definition of Done
 

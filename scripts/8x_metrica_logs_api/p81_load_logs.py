@@ -264,12 +264,13 @@ def ingest_day(
 ) -> int:
     """Запустить приём одного дня под локом — run-level единичного прогона (AC #1, #3).
 
-    Берёт ``.writer.lock`` **один раз** (AC #3, fail-fast если занят живым писателем),
-    открывает write-соединение ``gdau.duckdb`` (2.1), строит :class:`MetricaClient` из кредов
-    окружения (1.2; fail-loud ДО сети при отсутствии кредов), заводит чекпойнт-таблицу и
-    типизированные view'ы (идемпотентно; пере-определяет их и ПОСЛЕ load_day — иначе свежий
-    источник остался бы пуст, см. ниже) и зовёт :func:`load_day`. Ad-hoc единичный
-    прогон одного дня одного источника.
+    Читает креды окружения **до** лока (1.2; fail-loud ДО сети при отсутствии кредов; и грузит
+    ``.env`` в окружение — от него зависит резолюция ``GDAU_DATA_ROOT`` в ``writer_lock``/
+    ``connection``, см. :func:`ingest_range`), берёт ``.writer.lock`` **один раз** (AC #3,
+    fail-fast если занят живым писателем), открывает write-соединение ``gdau.duckdb`` (2.1),
+    строит :class:`MetricaClient`, заводит чекпойнт-таблицу и типизированные view'ы
+    (идемпотентно; пере-определяет их и ПОСЛЕ load_day — иначе свежий источник остался бы пуст,
+    см. ниже) и зовёт :func:`load_day`. Ad-hoc единичный прогон одного дня одного источника.
 
     **2.8 НЕ зовёт ``ingest_day`` в цикле** (``writer_lock`` не реентерабелен — повторный
     захват того же пути конфликтует сам с собой): диапазон дней берёт лок **один раз** вокруг
@@ -280,9 +281,11 @@ def ingest_day(
     :class:`~scripts.utils.writer_lock.WriterLockHeldError`, если хранилище занято другим
     писателем, и :class:`ValueError` из ридера кредов, если их нет).
     """
+    # Креды читаем ДО лока: грузит .env (GDAU_DATA_ROOT для writer_lock/connection — paths сам
+    # .env не грузит) и fail-loud при отсутствии кредов до взятия лока/сети (см. ingest_range).
+    creds = read_metrica_credentials()
     with writer_lock():  # один захват на весь прогон (AC #3, scope — зацикливающий вход)
         with DatabaseManager.connection() as conn:  # write-соединение (создаёт БД при отсутствии)
-            creds = read_metrica_credentials()  # fail-loud ДО сети, если кредов нет
             client = MetricaClient(token=creds.token, counter_id=creds.counter_id)
             # Чекпойнт-таблица (2.4) + типизированные view'ы (2.6), идемпотентно.
             ensure_load_state_table(conn)
@@ -417,10 +420,13 @@ def ingest_range(
     одним локом, 2.9 вынесет лок/conn/клиент наружу и позовёт диапазонную логику по каждому
     ``source`` (без реентрантности — риск №1/№7).
 
-    **Порядок СТРОГИЙ.** Clamp диапазона и валидация ``N`` — **до** лока (fail-fast, риск №8):
-    не брать лок и не строить клиент для заведомо пустого/инвертированного диапазона.
-    ``moscow_today()`` замеряется **один раз** — потолок clamp (``today - 1``) и якорь
-    hot-window (``today - 1``) гарантированно консистентны (нет TOCTOU на полночи, риск №4).
+    **Порядок СТРОГИЙ.** Чтение кредов, clamp диапазона и валидация ``N`` — **до** лока
+    (fail-fast, риск №8): не брать лок для заведомо пустого/инвертированного диапазона или при
+    отсутствии кредов. Чтение кредов **до** лока ещё и грузит ``.env`` в окружение, от которого
+    зависит резолюция ``GDAU_DATA_ROOT`` в ``writer_lock``/``connection`` (``paths`` сам ``.env``
+    не грузит) — иначе лок резолвил бы корень хранилища ДО загрузки ``.env``. ``moscow_today()``
+    замеряется **один раз** — потолок clamp (``today - 1``) и якорь hot-window (``today - 1``)
+    гарантированно консистентны (нет TOCTOU на полночи, риск №4).
 
     **Сбой дня → проброс (риск №6).** Если ``load_day`` бросает (``RowCountMismatchError`` 2.3,
     терминальный статус API, исчерпание poll) — исключение пробрасывается наружу (лок снимается
@@ -444,20 +450,27 @@ def ingest_range(
     :param max_consecutive_errors: лимит подряд-ошибок опроса (проброс в ``load_day``).
     :param sleep: шов сна (по умолчанию :func:`time.sleep`; тесты дают no-op).
     :returns: :class:`IngestRangeResult` (что перезалито/пропущено/сумма строк) для 2.9.
-    :raises ValueError: невалидный ``source``/формат даты, инвертированный диапазон (clamp) и
-        ``hot_window_days < 0`` — fail-fast ДО лока; отсутствие кредов — fail-loud ДО сети, но
-        уже ПОД локом (``read_metrica_credentials`` зовётся после ``writer_lock``/``connection``,
-        как ``ingest_day`` 2.7 — лок берётся раньше чтения кредов).
+    :raises ValueError: невалидный ``source``/формат даты, инвертированный диапазон (clamp),
+        ``hot_window_days < 0`` и отсутствие кредов — всё fail-fast ДО лока и ДО сети.
+        ``read_metrica_credentials`` зовётся ПЕРЕД ``writer_lock`` намеренно: его побочный
+        эффект грузит ``.env`` в окружение, от которого зависит резолюция ``GDAU_DATA_ROOT`` в
+        ``writer_lock``/``connection`` (``paths`` сам ``.env`` не грузит).
     :raises WriterLockHeldError: хранилище занято другим живым писателем.
     :raises RuntimeError: проброс сбоя дня из ``load_day`` (включая ``RowCountMismatchError``).
     """
-    # --- до лока (fail-fast — риск №8): валидация + clamp без взятия лока/построения клиента ---
+    # --- до лока (fail-fast — риск №8): валидация + чтение кредов + clamp без взятия лока ---
     _require_valid_source(source)
     if hot_window_days < 0:  # дублируем гард _select_days_to_load ДО лока (AC #5, риск №8)
         raise ValueError(
             f"hot_window_days не может быть отрицательным: {hot_window_days} "
             f"(0 — окно выключено, >0 — размер свежего окна перезалива)"
         )
+    # Креды читаем ДО лока. Помимо fail-loud-а при отсутствии кредов (не брать лок ради
+    # заведомо нерабочего прогона), это грузит .env в окружение (env_reader._load_env), а от
+    # него зависит резолюция GDAU_DATA_ROOT в writer_lock/connection: paths сам .env НЕ грузит
+    # (см. paths.py). Иначе writer_lock резолвил бы корень хранилища ДО загрузки .env →
+    # ValueError «GDAU_DATA_ROOT не задана» при штатном запуске оператора из папки игры.
+    creds = read_metrica_credentials()
     today = moscow_today()  # ОДИН замер часов: потолок clamp и якорь окна консистентны (риск №4)
     d1, d2 = clamp_date_range(parse_date(date1), parse_date(date2), today_msk=today)
     anchor = today - timedelta(days=1)  # == потолок clamp == вчера по МСК
@@ -465,7 +478,6 @@ def ingest_range(
     # --- под локом ОДИН раз (AC #3): запись всего диапазона под единым .writer.lock ---
     with writer_lock():  # один захват на весь прогон (НЕ на каждый день — риск №1)
         with DatabaseManager.connection() as conn:  # write-соединение (создаёт БД при отсутствии)
-            creds = read_metrica_credentials()  # fail-loud ДО сети, если кредов нет
             client = MetricaClient(token=creds.token, counter_id=creds.counter_id)
             # Чекпойнт-таблица (2.4) + типизированные view'ы (2.6), идемпотентно. View'ы строим
             # ДО загрузки (слой существует, даже когда грузить нечего) И пере-строим ПОСЛЕ (ниже):

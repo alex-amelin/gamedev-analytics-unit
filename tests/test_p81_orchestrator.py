@@ -31,7 +31,12 @@ import pytest
 from scripts.utils.catalog import Catalog, CatalogField
 from scripts.utils.database_manager import DatabaseManager
 from scripts.utils.dates import format_date, moscow_yesterday
-from scripts.utils.env_reader import DATA_ROOT_ENV, MetricaCredentials
+from scripts.utils.env_reader import (
+    COUNTER_ENV,
+    DATA_ROOT_ENV,
+    MetricaCredentials,
+    TOKEN_ENV,
+)
 from scripts.utils.load_state import ensure_load_state_table
 from scripts.utils.row_check import RowCountMismatchError, count_part_rows
 from scripts.utils.writer_lock import WriterLockHeldError, writer_lock
@@ -245,6 +250,11 @@ def test_ingest_day_fails_fast_when_lock_held(
 ) -> None:
     """Лок занят живым писателем → ingest_day fail-fast, без записи (AC #3)."""
     monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path))
+    # Креды валидны (читаются ДО лока): иначе fail-fast случился бы на их отсутствии раньше
+    # лока — а проверяем именно реакцию на занятый лок.
+    monkeypatch.setattr(
+        p81, "read_metrica_credentials", lambda: MetricaCredentials(token="t", counter_id=1)
+    )
     day = _yesterday()
 
     # Держим лок по дефолтному пути ({root}/.writer.lock) — ingest_day берёт тот же путь.
@@ -252,7 +262,7 @@ def test_ingest_day_fails_fast_when_lock_held(
         with pytest.raises(WriterLockHeldError):
             p81.ingest_day("visits", day, catalog=_catalog(), poll_interval_s=0.0, sleep=_no_sleep)
 
-    # Запись не дошла: ни партиции, ни БД (лок брался ДО conn/клиента).
+    # Запись не дошла: креды прочитаны, но на занятом локе fail-fast — ни conn, ни партиции, ни БД.
     assert not (tmp_path / "data" / "raw" / "visits").exists()
 
 
@@ -660,3 +670,60 @@ def test_ingest_day_view_reflects_loaded_partition(
 
     with DatabaseManager.connection(read_only=True) as con:
         assert con.execute("SELECT count(*) FROM visits").fetchone()[0] == 2
+
+
+# --- Регрессия (обкатка 2026-05-26): креды/.env читаются ДО резолюции путей хранилища -------
+
+
+def test_ingest_range_reads_env_before_path_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Корень хранилища отдан ТОЛЬКО через .env — приём не падает на резолюции путей.
+
+    Реальный сценарий оператора: токен/счётчик/``GDAU_DATA_ROOT`` лежат в ``.env`` хранилища,
+    а НЕ в процесс-окружении. ``read_metrica_credentials`` (он и грузит ``.env``) обязан
+    отработать ДО ``writer_lock``/``connection``, которые резолвят ``GDAU_DATA_ROOT`` из
+    окружения через ``paths`` (сам ``.env`` не грузит). На баге порядка лок резолвил корень
+    ДО загрузки ``.env`` → ``ValueError`` «GDAU_DATA_ROOT не задана».
+
+    Остальные тесты ставят ``GDAU_DATA_ROOT`` через ``monkeypatch.setenv`` и потому баг
+    маскировали — здесь корень намеренно приходит только из файла (как у оператора).
+    """
+    # Креды/корень НЕ в окружении: delenv фиксирует «изначально отсутствует», поэтому teardown
+    # снимет и значения, которые подгрузит load_dotenv (изоляция от соседних тестов).
+    for var in (DATA_ROOT_ENV, TOKEN_ENV, COUNTER_ENV):
+        monkeypatch.delenv(var, raising=False)
+    (tmp_path / ".env").write_text(
+        f"{TOKEN_ENV}=t\n{COUNTER_ENV}=1\n{DATA_ROOT_ENV}={tmp_path}\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)  # find_dotenv(usecwd=True) найдёт .env хранилища от cwd
+    monkeypatch.setattr(p81, "MetricaClient", lambda **kwargs: _FakeClient())
+
+    day = _yesterday()
+    # read_metrica_credentials НЕ подменяем — нужен его реальный побочный эффект (загрузка .env).
+    result = p81.ingest_range(
+        "visits", day, day, catalog=_catalog(),
+        hot_window_days=0, poll_interval_s=0.0, sleep=_no_sleep,
+    )
+    assert result.total_rows == 2  # на баге сюда не дошли бы: ValueError на writer_lock
+
+    with DatabaseManager.connection(read_only=True) as con:
+        assert con.execute("SELECT count(*) FROM visits").fetchone()[0] == 2
+
+
+def test_ingest_day_reads_env_before_path_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """То же для ingest_day: корень только через ``.env``, креды — до лока/резолюции путей."""
+    for var in (DATA_ROOT_ENV, TOKEN_ENV, COUNTER_ENV):
+        monkeypatch.delenv(var, raising=False)
+    (tmp_path / ".env").write_text(
+        f"{TOKEN_ENV}=t\n{COUNTER_ENV}=1\n{DATA_ROOT_ENV}={tmp_path}\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(p81, "MetricaClient", lambda **kwargs: _FakeClient())
+
+    written = p81.ingest_day(
+        "visits", _yesterday(), catalog=_catalog(), poll_interval_s=0.0, sleep=_no_sleep
+    )
+    assert written == 2

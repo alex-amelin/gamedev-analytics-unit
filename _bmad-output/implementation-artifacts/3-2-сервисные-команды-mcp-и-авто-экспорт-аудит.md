@@ -1,6 +1,6 @@
 # Story 3.2: Сервисные команды MCP и авто-экспорт/аудит
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -97,64 +97,64 @@ directaiq `_save_audit_log` оборачивает всё в `try/except Excepti
 
 ## Tasks / Subtasks
 
-- [ ] **Task 0 — Предусловие: 3.1 реализована и влита; прочитать её код**
-  - [ ] Убедиться, что 3.1 (`ready-for-dev`) реализована и в `main`/базовой ветке (иначе расширять нечего). Если нет — сначала 3.1.
-  - [ ] Прочитать фактический `scripts/mcp/tools/core.py` + `scripts/mcp/gdau_mcp_server.py` из 3.1: сигнатуры/имена констант/форму `_reject_if_not_readonly`/`_clamp_limit`/`_format_sql_error`/форматтеров. Контракт ниже сверять с фактом.
-- [ ] **Task 1 — Path-резолверы `scripts/utils/paths.py` (UPDATE; AC #7)**
-  - [ ] `get_results_dir() -> Path` → `get_storage_root() / "data" / "results"` (чистая, без mkdir; русский докстринг как у соседей).
-  - [ ] `get_mcp_output_dir() -> Path` → `get_storage_root() / "data" / "mcp_output"` (чистая, без mkdir — **отличие от directaiq**, где был mkdir; зафиксировать «почему» комментарием: инвариант чистых резолверов).
-  - [ ] Добавить оба в `__all__`.
-- [ ] **Task 2 — Сервисный слой `scripts/mcp/tools/core.py` (UPDATE; AC #1/#2/#4/#5/#6/#8/#10)**
-  - [ ] Обновить шапку-пометку вендоринга: добавить, что в 3.2 принесены `_export_query`/`_validate_table_name`/`_handle_schema`(plain)/роутинг спец-команд + авто-экспорт; `trimmed:` всё ещё без `_COST_COLUMN_SEMANTICS`/`_annotate_money_column`/`--context`/placeholders/`config_manager` → 3.3.
-  - [ ] **`_validate_table_name(name) -> str | None`** (вендоринг verbatim): `strip` + regex `^[A-Za-z0-9_]+$` → имя или `None`. Константа `_VALID_TABLE_NAME`.
-  - [ ] **Существование таблицы (AC #4, новое поверх directaiq):** хелпер открывает своё read-only соединение, читает реальные объекты (`SELECT table_name FROM information_schema.tables WHERE table_schema='main'`); искомое имя не в наборе → понятная ошибка not-found **со списком известных** (из того же запроса). Идентификатор в SQL — квотировать `"name"` с удвоением `"`. _(Двойное обращение к БД — existence-check + сам запрос — приемлемо для «одного оператора»; не усложнять переиспользованием conn.)_
-  - [ ] **`_run_copy_export(conn, sql, output_path, ext) -> str`** (новый общий хелпер, риск №2): `COPY ({sql}) TO '{safe}' (…)` по `ext` (`.parquet`→`(FORMAT PARQUET)`; `.json`→`(FORMAT JSON, ARRAY true)`; иначе `(HEADER, DELIMITER ',')`); путь экранировать `'`→`''`; `SELECT COUNT(*) FROM '{safe}'` (guard None у `fetchone()`) → `«Экспортировано N строк в `path`»`. Зовётся обоими путями (авто-экспорт с открытым conn, `--export` со своим).
-  - [ ] **`_export_query(sql, filename) -> str`** (адаптировать directaiq, риск №1/№4):
-    - [ ] guard внутреннего SQL: `_reject_if_not_readonly(sql)` → если отказ, вернуть его (не строить COPY).
-    - [ ] валидация расширения (∈ {csv,parquet,json}, иначе отказ — НЕ до-приписывать `.csv`); резолюция `(get_results_dir() / filename).resolve()` + `is_relative_to(get_results_dir().resolve())` (AC #5); `output_path.exists()` → отказ (AC #6); `get_results_dir().mkdir(parents=True, exist_ok=True)` (AC #7).
-    - [ ] `with DatabaseManager.connection(read_only=True) as conn:` → `_run_copy_export(conn, sql, output_path, ext)`. Ошибки: **`except RuntimeError → str(exc)`** (паритет с `execute_query` — до-данных→дружелюбный AC #8, а не «**Error:** RuntimeError»), `except duckdb.Error → _format_sql_error`, `except Exception → строка` (наружу не выпускать).
-  - [ ] **`execute_query` (UPDATE; AC #2/#8):** **после** retry-ветки и `conn.description`-гарда (где `rows`/`columns` уже есть), **перед** dispatch форматтера — `if len(rows) > AUTO_EXPORT_THRESHOLD:` → таймстамп-имя `auto_export_{ts}.csv` под `get_results_dir()` (mkdir; коллизия → счётчик/микросекунды) → `return «Результат велик (N строк). » + _run_copy_export(conn, query, auto_path, ".csv")` (**переиспользовать открытый `conn`**, риск №2). Константа `AUTO_EXPORT_THRESHOLD = 500` в блок констант 3.1; граница строго `>` по `len(rows)` (AC #8). **Не сломать** существующие `except InterruptException`/`RuntimeError`/`duckdb.Error`/`Exception` (они оборачивают весь `with`) и `_clamp_limit`.
-  - [ ] **`_handle_schema(table_name, output_format, limit) -> str`** (plain, БЕЗ семантики — риск №6): проверить существование (AC #4); `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '{name}' ORDER BY ordinal_position` — **квотированный литерал** (`execute_query` принимает только строку SQL, bind-параметр `?` не пробрасывается; имя уже прошло `_validate_table_name` `^[A-Za-z0-9_]+$` + удвоение `'` → инъекция невозможна) → `execute_query(sql, output_format, limit)` (один источник форматирования). **НЕ** строить `CASE semantics`/`_annotate_money_column`.
-  - [ ] **`handle_query` (UPDATE; AC #1):** факт. функция делает `cleaned = (query or "").strip()`; пустой→подсказка; иначе `execute_query(cleaned, …)`. Добавить роутинг **по `cleaned`** (не делать strip второй раз) ПЕРЕД финальным `return execute_query(cleaned, …)`:
-    - [ ] `cleaned == "--tables"` → `SELECT table_name FROM information_schema.tables WHERE table_schema='main' ORDER BY table_name` → `execute_query`.
-    - [ ] `cleaned == "--schema"` (ровно) → схема всех (`information_schema.columns`, schema='main') → `execute_query`.
-    - [ ] `cleaned.startswith("--schema ")` → `_validate_table_name(остаток)`; невалид → ошибка; иначе `_handle_schema`.
-    - [ ] `cleaned.startswith("--sample ")` → split; `_validate_table_name(parts[1])`; невалид → ошибка; проверить существование (AC #4); `N`: отсутствует → `DEFAULT_SAMPLE=5`, есть и `.isdigit()` → `max(1, int)` (AC #10), иначе дефолт; `SELECT * FROM "{name}" LIMIT {N}` (квотировать имя `"`-удвоением) → `execute_query`.
-    - [ ] `cleaned.startswith("--export ")` → `shlex.split(остаток)` (кросс-платформенно; `posix=True` по умолчанию обрабатывает кавычки); `len>=2` → `_export_query(parts[0], parts[1])`; иначе usage-ошибка; `except ValueError` shlex → ошибка.
-    - [ ] **НЕ** добавлять `--context` (3.3). Fall-through (любой иной текст) → `execute_query(cleaned, …)` как раньше.
-    - [ ] Константы `DEFAULT_SAMPLE = 5`, `AUTO_EXPORT_THRESHOLD = 500` — в блок констант 3.1 (рядом с `DEFAULT_LIMIT`/`MAX_LIMIT`; в `__all__` не обязательны — тесты обращаются через `core.X`/monkeypatch, как к `STATEMENT_TIMEOUT_S`).
-- [ ] **Task 3 — Audit-лог `scripts/mcp/gdau_mcp_server.py` (UPDATE; AC #3/#9)**
-  - [ ] **`_save_audit_log(tool_name, parameters, result) -> None`** (адаптировать directaiq, риск №7): `mcp_dir = get_mcp_output_dir(); mcp_dir.mkdir(parents=True, exist_ok=True)` (из `scripts.utils.paths`, НЕ из `common.py`); имя `{tool}_{YYYY-MM-DD_HHMMSS}.json`; конверт `{tool, timestamp(isoformat), parameters, result}` (result: попытка `json.loads`, иначе строка); `json.dump(..., ensure_ascii=False, indent=2, default=str)`. **`except Exception as e: logger.warning(...)`** (НЕ `pass`).
-  - [ ] **`duckdb_query` (UPDATE):** после `result = handle_query(query, format, limit)` → `_save_audit_log("duckdb_query", {"query":query,"format":format,"limit":limit}, result)` → `return result`.
-  - [ ] **Перевернуть `ToolAnnotations(readOnlyHint=False, …)`** (3.1 ставил True; теперь экспорт пишет файлы — как directaiq; `destructiveHint=False`, `idempotentHint=True`, `openWorldHint=False`).
-  - [ ] **Docstring/`Field`-описание инструмента:** рекламировать `--tables`/`--schema [TABLE]`/`--sample TABLE [N]`/`--export "SQL" file.{csv|parquet|json}` (теперь существуют) + авто-экспорт >500 + что результаты/аудит идут в `data/results/`/`data/mcp_output/`. **НЕ** упоминать `--context` (3.3), Direct/НДС/goal-плейсхолдеры/`t10_*`/`t18_*`.
-  - [ ] Импорт `get_mcp_output_dir` из `scripts.utils.paths` (НЕ заводить `scripts/mcp/utils/common.py` — это `config_manager`-шов, его в репо нет).
-- [ ] **Task 4 — Спека `docs/mcp-query.md` (UPDATE; часть DoD)**
-  - [ ] Дополнить (3 вопроса project-context): **что делает** — сервисные команды навигации + безопасный вывод больших результатов; **зачем** — ориентироваться без ручного перебора, не переполнять ответ; **контракт** — `--tables`/`--schema`/`--sample` (read), `--export`/авто-экспорт пишут **только** в `data/results/` (traversal/клоббер/расширение защищены), audit каждого вызова в `data/mcp_output/`, лок писателя по-прежнему не берётся. Отметить, что `--context`/семантика каталога — следующая история (3.3).
-- [ ] **Task 5 — Тесты (UPDATE существующих 3.1 + новые кейсы)**
-  - [ ] **`tests/test_mcp_core.py`** (расширить фикстуру 3.1: tmp-`gdau.duckdb` с view'ами `visits`/`hits` через `views.create_views` поверх tmp-партиции):
-    - [ ] **AC #1:** `--tables` → есть `visits`/`hits`; `--schema` → колонки всех; `--schema visits` → колонки visits (без колонки semantics — риск №6); `--sample visits 3` → ≤3 строки.
-    - [ ] **AC #4:** `--schema nonexist`/`--sample nonexist` → not-found (не сырой DuckDB-err); `--schema "visits; DROP …"` / спецсимволы → отклонено `_validate_table_name`; имя квотируется (таблица с `_`/смешанным регистром читается).
-    - [ ] **AC #2/#8:** результат 500 строк → inline (формат), 501 → авто-экспорт (сообщение + файл в `{tmp}/data/results/` существует, число строк верное). Граница `>` (off-by-one закреплён).
-    - [ ] **AC #5:** `--export "SELECT 1" ../evil.csv` и абсолютный путь → отказ, файл вне `data/results/` НЕ создан.
-    - [ ] **AC #6:** неизвестное расширение (`x.txt`) → отказ (НЕ создан `x.txt.csv`); экспорт в существующий файл → отказ (исходный не перезаписан). `.parquet`/`.json`/`.csv` → файл создан с верным форматом.
-    - [ ] **Риск №1:** `--export "DROP TABLE visits" x.csv` → отказ guard'ом (visits цела, файл не создан).
-    - [ ] **AC #7:** при отсутствии `data/results/` экспорт его создаёт.
-    - [ ] **AC #8 (до данных):** хранилище без `gdau.duckdb` → `--export "SELECT 1" x.csv` (и `--schema`/`--sample`/`--tables`) → дружелюбная подсказка про `gdau-logs update` (не `**Error:** RuntimeError`). Грунт под `except RuntimeError` в `_export_query`.
-    - [ ] **AC #10:** `--sample visits` (без N) → 5 строк; `--sample visits 0` / `-3` → ≥1 (клампинг/дефолт).
-    - [ ] **AC #2 граница 101–500 (риск №5):** результат 300 строк при дефолтном limit=100 → inline усечён до 100 с `has_more=true`, файл НЕ создан (НЕ авто-экспорт).
-    - [ ] **Регресс 3.1:** теста «`--tables` уходит как SQL» в 3.1 **нет** — заменять нечего; добавить новые тесты роутинга. Существующие тесты 3.1 (happy-path/guard/clamp/timeout/retry/до-данных) — оставить зелёными (вставка роутинга/авто-экспорта их не ломает).
-  - [ ] **`tests/test_gdau_mcp_server.py`** (расширить):
-    - [ ] **AC #3:** вызов `duckdb_query` пишет JSON-конверт в `{tmp}/data/mcp_output/` (поля `tool/timestamp/parameters/result`).
-    - [ ] **AC #9:** monkeypatch `get_mcp_output_dir`/`mkdir`/`open` бросить → `duckdb_query` всё равно возвращает результат, аудит-сбой → WARNING (не исключение). Проверить, что результат идентичен запросу без сбоя аудита.
-    - [ ] **readOnlyHint=False** в `ToolAnnotations` (перевёрнут vs 3.1).
-    - [ ] **Анти-зависимость (как 3.1, по import-узлам ast):** в `scripts/mcp/**` нет импорта `config_manager`/`auth_manager`/`directaiq`/`scripts.mcp.utils.common`; audit берёт `get_mcp_output_dir` из `scripts.utils.paths`.
-  - [ ] **`tests/test_paths.py`** (если есть — расширить; AC #7): `get_results_dir()`/`get_mcp_output_dir()` дают `{root}/data/results`/`{root}/data/mcp_output`, **не делают mkdir** (каталога нет после вызова), fail-loud при битом `GDAU_DATA_ROOT` (наследуется из `get_storage_root`).
-- [ ] **Гейты перед сдачей**
-  - [ ] `uv run mypy scripts` → зелено (`strict=true`; новые функции типизированы, без `Any`-дыр; `fetchone()`/`fetchall()` → guard None; матрица CI ubuntu+windows, локально доп. `--platform linux`).
-  - [ ] `uv run pytest` (offline) → зелено; маркер `live` не вводится (MCP-чтение в Logs API не ходит).
-  - [ ] `uv.lock`/`pyproject.toml` не менялись (`mcp`/`pydantic`/`duckdb`/`python-dotenv` уже есть; `shlex`/`json`/`datetime`/`re` — stdlib).
-  - [ ] Чек-лист «Definition of Done» пройден; `docs/mcp-query.md` обновлён (компонент без актуальной спеки не «готов»).
+- [x] **Task 0 — Предусловие: 3.1 реализована и влита; прочитать её код**
+  - [x] Убедиться, что 3.1 (`ready-for-dev`) реализована и в `main`/базовой ветке (иначе расширять нечего). Если нет — сначала 3.1.
+  - [x] Прочитать фактический `scripts/mcp/tools/core.py` + `scripts/mcp/gdau_mcp_server.py` из 3.1: сигнатуры/имена констант/форму `_reject_if_not_readonly`/`_clamp_limit`/`_format_sql_error`/форматтеров. Контракт ниже сверять с фактом.
+- [x] **Task 1 — Path-резолверы `scripts/utils/paths.py` (UPDATE; AC #7)**
+  - [x] `get_results_dir() -> Path` → `get_storage_root() / "data" / "results"` (чистая, без mkdir; русский докстринг как у соседей).
+  - [x] `get_mcp_output_dir() -> Path` → `get_storage_root() / "data" / "mcp_output"` (чистая, без mkdir — **отличие от directaiq**, где был mkdir; зафиксировать «почему» комментарием: инвариант чистых резолверов).
+  - [x] Добавить оба в `__all__`.
+- [x] **Task 2 — Сервисный слой `scripts/mcp/tools/core.py` (UPDATE; AC #1/#2/#4/#5/#6/#8/#10)**
+  - [x] Обновить шапку-пометку вендоринга: добавить, что в 3.2 принесены `_export_query`/`_validate_table_name`/`_handle_schema`(plain)/роутинг спец-команд + авто-экспорт; `trimmed:` всё ещё без `_COST_COLUMN_SEMANTICS`/`_annotate_money_column`/`--context`/placeholders/`config_manager` → 3.3.
+  - [x] **`_validate_table_name(name) -> str | None`** (вендоринг verbatim): `strip` + regex `^[A-Za-z0-9_]+$` → имя или `None`. Константа `_VALID_TABLE_NAME`.
+  - [x] **Существование таблицы (AC #4, новое поверх directaiq):** хелпер открывает своё read-only соединение, читает реальные объекты (`SELECT table_name FROM information_schema.tables WHERE table_schema='main'`); искомое имя не в наборе → понятная ошибка not-found **со списком известных** (из того же запроса). Идентификатор в SQL — квотировать `"name"` с удвоением `"`. _(Двойное обращение к БД — existence-check + сам запрос — приемлемо для «одного оператора»; не усложнять переиспользованием conn.)_
+  - [x] **`_run_copy_export(conn, sql, output_path, ext) -> str`** (новый общий хелпер, риск №2): `COPY ({sql}) TO '{safe}' (…)` по `ext` (`.parquet`→`(FORMAT PARQUET)`; `.json`→`(FORMAT JSON, ARRAY true)`; иначе `(HEADER, DELIMITER ',')`); путь экранировать `'`→`''`; `SELECT COUNT(*) FROM '{safe}'` (guard None у `fetchone()`) → `«Экспортировано N строк в `path`»`. Зовётся обоими путями (авто-экспорт с открытым conn, `--export` со своим).
+  - [x] **`_export_query(sql, filename) -> str`** (адаптировать directaiq, риск №1/№4):
+    - [x] guard внутреннего SQL: `_reject_if_not_readonly(sql)` → если отказ, вернуть его (не строить COPY).
+    - [x] валидация расширения (∈ {csv,parquet,json}, иначе отказ — НЕ до-приписывать `.csv`); резолюция `(get_results_dir() / filename).resolve()` + `is_relative_to(get_results_dir().resolve())` (AC #5); `output_path.exists()` → отказ (AC #6); `get_results_dir().mkdir(parents=True, exist_ok=True)` (AC #7).
+    - [x] `with DatabaseManager.connection(read_only=True) as conn:` → `_run_copy_export(conn, sql, output_path, ext)`. Ошибки: **`except RuntimeError → str(exc)`** (паритет с `execute_query` — до-данных→дружелюбный AC #8, а не «**Error:** RuntimeError»), `except duckdb.Error → _format_sql_error`, `except Exception → строка` (наружу не выпускать).
+  - [x] **`execute_query` (UPDATE; AC #2/#8):** **после** retry-ветки и `conn.description`-гарда (где `rows`/`columns` уже есть), **перед** dispatch форматтера — `if len(rows) > AUTO_EXPORT_THRESHOLD:` → таймстамп-имя `auto_export_{ts}.csv` под `get_results_dir()` (mkdir; коллизия → счётчик/микросекунды) → `return «Результат велик (N строк). » + _run_copy_export(conn, query, auto_path, ".csv")` (**переиспользовать открытый `conn`**, риск №2). Константа `AUTO_EXPORT_THRESHOLD = 500` в блок констант 3.1; граница строго `>` по `len(rows)` (AC #8). **Не сломать** существующие `except InterruptException`/`RuntimeError`/`duckdb.Error`/`Exception` (они оборачивают весь `with`) и `_clamp_limit`.
+  - [x] **`_handle_schema(table_name, output_format, limit) -> str`** (plain, БЕЗ семантики — риск №6): проверить существование (AC #4); `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '{name}' ORDER BY ordinal_position` — **квотированный литерал** (`execute_query` принимает только строку SQL, bind-параметр `?` не пробрасывается; имя уже прошло `_validate_table_name` `^[A-Za-z0-9_]+$` + удвоение `'` → инъекция невозможна) → `execute_query(sql, output_format, limit)` (один источник форматирования). **НЕ** строить `CASE semantics`/`_annotate_money_column`.
+  - [x] **`handle_query` (UPDATE; AC #1):** факт. функция делает `cleaned = (query or "").strip()`; пустой→подсказка; иначе `execute_query(cleaned, …)`. Добавить роутинг **по `cleaned`** (не делать strip второй раз) ПЕРЕД финальным `return execute_query(cleaned, …)`:
+    - [x] `cleaned == "--tables"` → `SELECT table_name FROM information_schema.tables WHERE table_schema='main' ORDER BY table_name` → `execute_query`.
+    - [x] `cleaned == "--schema"` (ровно) → схема всех (`information_schema.columns`, schema='main') → `execute_query`.
+    - [x] `cleaned.startswith("--schema ")` → `_validate_table_name(остаток)`; невалид → ошибка; иначе `_handle_schema`.
+    - [x] `cleaned.startswith("--sample ")` → split; `_validate_table_name(parts[1])`; невалид → ошибка; проверить существование (AC #4); `N`: отсутствует → `DEFAULT_SAMPLE=5`, есть и `.isdigit()` → `max(1, int)` (AC #10), иначе дефолт; `SELECT * FROM "{name}" LIMIT {N}` (квотировать имя `"`-удвоением) → `execute_query`.
+    - [x] `cleaned.startswith("--export ")` → `shlex.split(остаток)` (кросс-платформенно; `posix=True` по умолчанию обрабатывает кавычки); `len>=2` → `_export_query(parts[0], parts[1])`; иначе usage-ошибка; `except ValueError` shlex → ошибка.
+    - [x] **НЕ** добавлять `--context` (3.3). Fall-through (любой иной текст) → `execute_query(cleaned, …)` как раньше.
+    - [x] Константы `DEFAULT_SAMPLE = 5`, `AUTO_EXPORT_THRESHOLD = 500` — в блок констант 3.1 (рядом с `DEFAULT_LIMIT`/`MAX_LIMIT`; в `__all__` не обязательны — тесты обращаются через `core.X`/monkeypatch, как к `STATEMENT_TIMEOUT_S`).
+- [x] **Task 3 — Audit-лог `scripts/mcp/gdau_mcp_server.py` (UPDATE; AC #3/#9)**
+  - [x] **`_save_audit_log(tool_name, parameters, result) -> None`** (адаптировать directaiq, риск №7): `mcp_dir = get_mcp_output_dir(); mcp_dir.mkdir(parents=True, exist_ok=True)` (из `scripts.utils.paths`, НЕ из `common.py`); имя `{tool}_{YYYY-MM-DD_HHMMSS}.json`; конверт `{tool, timestamp(isoformat), parameters, result}` (result: попытка `json.loads`, иначе строка); `json.dump(..., ensure_ascii=False, indent=2, default=str)`. **`except Exception as e: logger.warning(...)`** (НЕ `pass`).
+  - [x] **`duckdb_query` (UPDATE):** после `result = handle_query(query, format, limit)` → `_save_audit_log("duckdb_query", {"query":query,"format":format,"limit":limit}, result)` → `return result`.
+  - [x] **Перевернуть `ToolAnnotations(readOnlyHint=False, …)`** (3.1 ставил True; теперь экспорт пишет файлы — как directaiq; `destructiveHint=False`, `idempotentHint=True`, `openWorldHint=False`).
+  - [x] **Docstring/`Field`-описание инструмента:** рекламировать `--tables`/`--schema [TABLE]`/`--sample TABLE [N]`/`--export "SQL" file.{csv|parquet|json}` (теперь существуют) + авто-экспорт >500 + что результаты/аудит идут в `data/results/`/`data/mcp_output/`. **НЕ** упоминать `--context` (3.3), Direct/НДС/goal-плейсхолдеры/`t10_*`/`t18_*`.
+  - [x] Импорт `get_mcp_output_dir` из `scripts.utils.paths` (НЕ заводить `scripts/mcp/utils/common.py` — это `config_manager`-шов, его в репо нет).
+- [x] **Task 4 — Спека `docs/mcp-query.md` (UPDATE; часть DoD)**
+  - [x] Дополнить (3 вопроса project-context): **что делает** — сервисные команды навигации + безопасный вывод больших результатов; **зачем** — ориентироваться без ручного перебора, не переполнять ответ; **контракт** — `--tables`/`--schema`/`--sample` (read), `--export`/авто-экспорт пишут **только** в `data/results/` (traversal/клоббер/расширение защищены), audit каждого вызова в `data/mcp_output/`, лок писателя по-прежнему не берётся. Отметить, что `--context`/семантика каталога — следующая история (3.3).
+- [x] **Task 5 — Тесты (UPDATE существующих 3.1 + новые кейсы)**
+  - [x] **`tests/test_mcp_core.py`** (расширить фикстуру 3.1: tmp-`gdau.duckdb` с view'ами `visits`/`hits` через `views.create_views` поверх tmp-партиции):
+    - [x] **AC #1:** `--tables` → есть `visits`/`hits`; `--schema` → колонки всех; `--schema visits` → колонки visits (без колонки semantics — риск №6); `--sample visits 3` → ≤3 строки.
+    - [x] **AC #4:** `--schema nonexist`/`--sample nonexist` → not-found (не сырой DuckDB-err); `--schema "visits; DROP …"` / спецсимволы → отклонено `_validate_table_name`; имя квотируется (таблица с `_`/смешанным регистром читается).
+    - [x] **AC #2/#8:** результат 500 строк → inline (формат), 501 → авто-экспорт (сообщение + файл в `{tmp}/data/results/` существует, число строк верное). Граница `>` (off-by-one закреплён).
+    - [x] **AC #5:** `--export "SELECT 1" ../evil.csv` и абсолютный путь → отказ, файл вне `data/results/` НЕ создан.
+    - [x] **AC #6:** неизвестное расширение (`x.txt`) → отказ (НЕ создан `x.txt.csv`); экспорт в существующий файл → отказ (исходный не перезаписан). `.parquet`/`.json`/`.csv` → файл создан с верным форматом.
+    - [x] **Риск №1:** `--export "DROP TABLE visits" x.csv` → отказ guard'ом (visits цела, файл не создан).
+    - [x] **AC #7:** при отсутствии `data/results/` экспорт его создаёт.
+    - [x] **AC #8 (до данных):** хранилище без `gdau.duckdb` → `--export "SELECT 1" x.csv` (и `--schema`/`--sample`/`--tables`) → дружелюбная подсказка про `gdau-logs update` (не `**Error:** RuntimeError`). Грунт под `except RuntimeError` в `_export_query`.
+    - [x] **AC #10:** `--sample visits` (без N) → 5 строк; `--sample visits 0` / `-3` → ≥1 (клампинг/дефолт).
+    - [x] **AC #2 граница 101–500 (риск №5):** результат 300 строк при дефолтном limit=100 → inline усечён до 100 с `has_more=true`, файл НЕ создан (НЕ авто-экспорт).
+    - [x] **Регресс 3.1:** теста «`--tables` уходит как SQL» в 3.1 **нет** — заменять нечего; добавить новые тесты роутинга. Существующие тесты 3.1 (happy-path/guard/clamp/timeout/retry/до-данных) — оставить зелёными (вставка роутинга/авто-экспорта их не ломает).
+  - [x] **`tests/test_gdau_mcp_server.py`** (расширить):
+    - [x] **AC #3:** вызов `duckdb_query` пишет JSON-конверт в `{tmp}/data/mcp_output/` (поля `tool/timestamp/parameters/result`).
+    - [x] **AC #9:** monkeypatch `get_mcp_output_dir`/`mkdir`/`open` бросить → `duckdb_query` всё равно возвращает результат, аудит-сбой → WARNING (не исключение). Проверить, что результат идентичен запросу без сбоя аудита.
+    - [x] **readOnlyHint=False** в `ToolAnnotations` (перевёрнут vs 3.1).
+    - [x] **Анти-зависимость (как 3.1, по import-узлам ast):** в `scripts/mcp/**` нет импорта `config_manager`/`auth_manager`/`directaiq`/`scripts.mcp.utils.common`; audit берёт `get_mcp_output_dir` из `scripts.utils.paths`.
+  - [x] **`tests/test_paths.py`** (если есть — расширить; AC #7): `get_results_dir()`/`get_mcp_output_dir()` дают `{root}/data/results`/`{root}/data/mcp_output`, **не делают mkdir** (каталога нет после вызова), fail-loud при битом `GDAU_DATA_ROOT` (наследуется из `get_storage_root`).
+- [x] **Гейты перед сдачей**
+  - [x] `uv run mypy scripts` → зелено (`strict=true`; новые функции типизированы, без `Any`-дыр; `fetchone()`/`fetchall()` → guard None; матрица CI ubuntu+windows, локально доп. `--platform linux`).
+  - [x] `uv run pytest` (offline) → зелено; маркер `live` не вводится (MCP-чтение в Logs API не ходит).
+  - [x] `uv.lock`/`pyproject.toml` не менялись (`mcp`/`pydantic`/`duckdb`/`python-dotenv` уже есть; `shlex`/`json`/`datetime`/`re` — stdlib).
+  - [x] Чек-лист «Definition of Done» пройден; `docs/mcp-query.md` обновлён (компонент без актуальной спеки не «готов»).
 
 ## Dev Notes
 
@@ -234,11 +234,43 @@ directaiq `_save_audit_log` оборачивает всё в `try/except Excepti
 
 ### Agent Model Used
 
+claude-opus-4-7[1m] (Amelia, dev-story workflow), 2026-05-26.
+
 ### Debug Log References
+
+- **Task 0 (предусловие):** 3.1 уже влита в `main` (commit `3e5e4dc`), файлы `scripts/mcp/**` трекаются, дерево чистое, ветка `story/3.2-mcp-service-commands` ответвлена. Фактический контракт 3.1 (`execute_query`/`handle_query`/`_reject_if_not_readonly`/`_clamp_limit`/`_format_sql_error`/`_execute_with_timeout`/форматтеры/блок констант/`__all__`) сверен с реальным `core.py` — совпал с описанием в story.
+- **DuckDB-smoke (де-риск перед тестами):** подтвердил эмпирически на DuckDB 1.5.3 — `COPY (…) TO` в `.csv`/`.parquet`/`.json` пишет файл; пере-чтение `SELECT COUNT(*) FROM '{file}'` корректно во всех трёх форматах; `range(501)` = 501 строка; `information_schema.tables/columns WHERE table_schema='main'` отдаёт view'ы visits/hits и их колонки. Это грунт под `_run_copy_export` и роутинг `--tables`/`--schema`.
+- **`--sample N` клампинг:** выбран `.isdigit()`-вариант (как предписано Task 2/AC #10) — `'0'.isdigit()=True → max(1,0)=1`; отрицательное/нечисловое (`'-3'.isdigit()=False`) → `DEFAULT_SAMPLE`. Так `N` всегда ≥1 и нет риска `int('--5')`-ValueError.
+- **Гейты:** `uv run mypy scripts` (strict) зелёный на win32 И `--platform linux` (23 файла); `uv run pytest` — 414 passed / 4 skipped / 8 live deselected (было 367 в 3.1, +47 тестов 3.2); `uv.lock`/`pyproject.toml` не менялись; data-артефактов в dev-репо нет.
 
 ### Completion Notes List
 
+Реализовано поверх тонкого read-канала 3.1 (UPDATE существующих файлов, без нового пути записи):
+
+- **Task 1 — `paths.py`:** добавлены чистые резолверы `get_results_dir()` → `{root}/data/results` и `get_mcp_output_dir()` → `{root}/data/mcp_output` (БЕЗ `mkdir` — инвариант, отличие от directaiq где `get_mcp_output_dir` делал mkdir); оба в `__all__`; fail-loud наследуется из `get_storage_root` (AC #7, риск №3).
+- **Task 2 — `tools/core.py` (сервисный слой):** роутинг `--tables`/`--schema [TABLE]`/`--sample TABLE [N]`/`--export` в `handle_query` по `cleaned` ПЕРЕД fall-through на `execute_query` (AC #1); ветка авто-экспорта `> AUTO_EXPORT_THRESHOLD=500` в `execute_query` после `conn.description`-гарда, **переиспользуя открытый conn** (риск №2), граница строго `>` по `len(rows)` ортогонально `_clamp_limit` (AC #2/#8, риск №5); общий `_run_copy_export` (COPY по расширению, путь экранируется `''`, COUNT пере-чтением); `_export_query` (guard внутреннего SQL → расширение ∈{csv,parquet,json} → traversal/abs через `is_relative_to` → запрет клоббера → `mkdir` → свой conn; `except RuntimeError → str` для AC #8, AC #5/#6/#7, риск №1/№4); `_handle_schema` plain БЕЗ семантики (риск №6 — 3.3); двух-слойная валидация имени `_validate_table_name` (regex `^[A-Za-z0-9_]+$`) + `_check_table_exists` (сверка с `information_schema`, not-found со списком) + квотирование идентификатора `"name"` (AC #4); `--sample` дефолт `DEFAULT_SAMPLE=5` + клампинг `max(1, N)` через `.isdigit()` (AC #10); `--export` через `shlex.split`.
+- **Task 3 — `gdau_mcp_server.py`:** `_save_audit_log` пишет конверт `{tool, timestamp, parameters, result}` в `data/mcp_output/` (`mkdir` на месте, сбой → `logger.warning`, НЕ `except:pass`, риск №7/AC #3/#9); вызывается в обёртке `duckdb_query` ПОСЛЕ `handle_query`; `readOnlyHint` перевёрнут `True→False` (канал пишет файлы-результаты, `destructiveHint=False`); docstring/`Field` рекламируют новые команды + авто-экспорт >500; `get_mcp_output_dir` из `scripts.utils.paths` (НЕ `common.py`).
+- **Task 4 — `docs/mcp-query.md`:** добавлены сервисные команды, безопасность экспорта (только `data/results/`, traversal/клоббер/расширение), журнал обращений (`data/mcp_output/`), обновлены «Границы» (3.2 done, осталась 3.3) и ручной smoke.
+- **Task 5 — тесты:** расширены `test_mcp_core.py` (новая фикстура `views_db` с реальными view'ами через `create_views` + 6 visits/2 hits/таблица `Mixed_Case`; покрыты AC #1/#2/#4/#5/#6/#7/#8/#10, риск №1/№5), `test_gdau_mcp_server.py` (audit-конверт AC #3, audit-сбой→WARNING AC #9, `readOnlyHint=False`, импорт `get_mcp_output_dir` из `paths`), `test_paths.py` (резолверы 3.2: пути, отсутствие mkdir, fail-loud). Регресс-тесты 3.1 не тронуты и остаются зелёными.
+
+**Скоуп соблюдён:** НЕ принесены `--context`/`_handle_context`, `_COST_COLUMN_SEMANTICS`/`_annotate_money_column`, goal-плейсхолдеры/`config_manager`, semantics в `--schema` (всё → 3.3). Read-only к БД сохранён: `gdau.duckdb` не мутируется, `.writer.lock` не берётся (экспорт пишет отдельный файл-результат). Зависимостей не добавлено (`shlex`/`json`/`datetime`/`re` — stdlib). Live неприменим (MCP-чтение/экспорт в Logs API не ходят).
+
 ### File List
+
+- `scripts/utils/paths.py` (UPDATE) — `get_results_dir`/`get_mcp_output_dir` + `__all__`.
+- `scripts/mcp/tools/core.py` (UPDATE) — роутинг спец-команд, авто-экспорт, `_run_copy_export`/`_export_query`/`_auto_export_path`/`_handle_schema`/`_handle_sample`/`_handle_export`/`_validate_table_name`/`_check_table_exists`/`_invalid_table_name_msg`, константы `AUTO_EXPORT_THRESHOLD`/`DEFAULT_SAMPLE`/`_VALID_TABLE_NAME`/`_EXPORT_EXTENSIONS`.
+- `scripts/mcp/gdau_mcp_server.py` (UPDATE) — `_save_audit_log`, вызов аудита в обёртке, `readOnlyHint=False`, docstring/`Field`.
+- `docs/mcp-query.md` (UPDATE) — сервисные команды + безопасность экспорта + аудит + граница 3.3.
+- `tests/test_mcp_core.py` (UPDATE) — фикстура `views_db` + тесты AC #1/#2/#4/#5/#6/#7/#8/#10 + риски №1/№5.
+- `tests/test_gdau_mcp_server.py` (UPDATE) — audit AC #3/#9, `readOnlyHint=False`, источник `get_mcp_output_dir`.
+- `tests/test_paths.py` (UPDATE) — резолверы 3.2 (AC #7).
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (UPDATE) — статус 3-2 ready-for-dev → in-progress → review.
+
+## Change Log
+
+| Дата | Изменение |
+|---|---|
+| 2026-05-26 | dev-story: реализованы сервисные команды MCP (`--tables`/`--schema [TABLE]`/`--sample TABLE [N]`/`--export`) + авто-экспорт >500 строк в `data/results/` + audit-лог каждого вызова в `data/mcp_output/` поверх тонкого read-канала 3.1 (FR-17). Все 10 AC закрыты, +47 тестов, гейты зелёные (mypy strict win32+linux, pytest 414 passed). Статус → review. |
 
 ## Definition of Done
 
@@ -251,3 +283,13 @@ directaiq `_save_audit_log` оборачивает всё в `try/except Excepti
 7. Тесты (UPDATE 3.1 + новые): сервис-команды/форматы / not-found+инъекция имени / авто-экспорт граница `>500` / traversal+abs отказ / клоббер+расширение / `--export "DROP…"` отказ guard'ом / отсутствующий каталог создаётся / `--sample` N-дефолт+клампинг / audit-конверт записан / audit-сбой→WARNING не валит / readOnlyHint=False / import-анти-зависимость (`config_manager`/`directaiq`/`common` не импортятся). Регресс-тесты 3.1 зелёные. (AC #1–#10)
 8. Гейты зелёные: `mypy scripts` (`strict=true`; CI ubuntu+windows, локально доп. `--platform linux`), `pytest` (offline, ubuntu+windows); `uv.lock`/`pyproject.toml` не менялись. Live неприменим (MCP-чтение/экспорт в Logs API не ходят).
 9. **Зависимость 3.1 учтена:** 3.1 прошла code-review и влита в `main` ДО старта 3.2; ветка 3.2 от обновлённого `main`; меняемые в коде 3.1 места (handle_query-роутинг по `cleaned`, execute_query-авто-экспорт с переиспользованием conn, `_export_query` `except RuntimeError`, readOnlyHint-флип, docstring) не сломали тесты 3.1 (pytest 363+ остаётся зелёным).
+
+## Review Findings (Code Review 2026-05-26)
+
+_Источник: bmad-code-review — 3 слоя Opus (Blind Hunter / Edge Case Hunter / Acceptance Auditor). Acceptance Auditor: все 10 AC PASS, 8 рисков PASS, DoD выполнен, гейты перепрогнаны зелёными (mypy strict 23 файла, pytest 78 по затронутым файлам). Триаж: 0 decision-needed, 4 patch, 1 defer, 7 dismiss._
+
+- [x] [Review][Patch] `--sample TABLE <unicode-цифра>` роняет инструмент необработанным `ValueError` [scripts/mcp/tools/core.py:604] — `parts[2].isdigit()` истинно для надстрочных/дробных юникод-цифр (`²`, `⁵`), но `int(parts[2])` бросает `ValueError`. Исключение идёт мимо try/except (он в `execute_query`, а `int()` срабатывает ДО её вызова) и мимо обёртки `duckdb_query` → нарушение инварианта «все ошибки → строка, сервер жив» (AC #6 3.1), вдобавок аудит вызова пропускается. Фикс: `.isdigit()` → `.isdecimal()` (точно совпадает с тем, что принимает `int()`). Подтверждено эмпирически. source: edge
+- [x] [Review][Patch] Audit-лог: имя файла с точностью до секунды → второй вызов в ту же секунду молча затирает первый [scripts/mcp/gdau_mcp_server.py:68] — имя `{tool}_{YYYY-MM-DD_HHMMSS}.json` + `open("w")`; два вызова `duckdb_query` в пределах одной секунды (типичный режим «агент водит CLI») теряют первую запись журнала → нарушение AC #3 «каждый вызов журналируется». `_auto_export_path` ровно этот риск уже закрывает микросекундами — аудит нет. Фикс: добавить `%f` (микросекунды) в имя файла. source: blind+edge
+- [x] [Review][Patch] `--export "…" sub/out.csv` (подкаталог) проходит `is_relative_to`, но запись падает сырым IOException + утечка абсолютного пути [scripts/mcp/tools/core.py:537-555] — `sub/out.csv` остаётся внутри `data/results/` (`is_relative_to`=True), `exists()`=False, но `mkdir` создаёт только `results_dir`, не `results_dir/sub` → `COPY … TO` → `**SQL Error:** IO Error: Cannot open file "<абс.путь хранилища>"`. Правдоподобный ввод → недружелюбная ошибка + утечка пути (ниже планки «ошибки → дружелюбная строка»). Фикс: отклонять имя с подкаталогом (файл строго прямой потомок `data/results/`) понятным сообщением. source: edge
+- [x] [Review][Patch] Комментарий «без … повторного fetch» вводит в заблуждение — авто-экспорт фактически повторно исполняет запрос [scripts/mcp/tools/core.py:380, 474] — `_run_copy_export` делает `COPY ({query})` + `SELECT COUNT(*)`, т.е. `query` исполняется ещё раз после fetch ради `len(rows)`. Переиспользование conn (риск №2) соблюдено, но «без повторного fetch» неверно: для недетерминированных запросов содержимое файла может разойтись с заявленным числом строк, плюс двойная стоимость. Для детерминированной аналитики приемлемо → фикс: привести комментарий/докстринг в соответствие коду (правдивое «почему»). source: blind+edge
+- [x] [Review][Defer] Авто-экспорт >500 для не-обёртываемых read-команд (`DESCRIBE`/`SHOW`/`SUMMARIZE`) даёт ложную SQL-ошибку [scripts/mcp/tools/core.py:381-386] — deferred: введено этим изменением, но крайне узко (нужна метаданные-команда, дающая >500 строк; у `visits`/`hits` ~30 колонок — недостижимо), фикс добавляет ветвление вопреки «простота-первой». Записано в `deferred-work.md`. source: edge

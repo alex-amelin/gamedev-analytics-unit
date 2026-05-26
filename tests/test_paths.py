@@ -20,8 +20,10 @@ import pytest
 from scripts.utils.env_reader import DATA_ROOT_ENV
 from scripts.utils.paths import (
     get_db_path,
+    get_mcp_output_dir,
     get_raw_partition_path,
     get_raw_source_dir,
+    get_results_dir,
     get_storage_root,
     get_writer_lock_path,
 )
@@ -73,6 +75,58 @@ def test_get_writer_lock_path_at_root(
     monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path))
 
     assert get_writer_lock_path() == tmp_path.resolve() / ".writer.lock"
+
+
+# --- 3.2: каталоги результатов/аудита MCP — чистые резолверы без mkdir (AC #7) ----
+
+
+def test_get_results_dir_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """get_results_dir → {root}/data/results (3.2, AC #7)."""
+    monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path))
+
+    assert get_results_dir() == tmp_path.resolve() / "data" / "results"
+
+
+def test_get_mcp_output_dir_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """get_mcp_output_dir → {root}/data/mcp_output (3.2, AC #7)."""
+    monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path))
+
+    assert get_mcp_output_dir() == tmp_path.resolve() / "data" / "mcp_output"
+
+
+def test_results_and_mcp_output_dirs_make_no_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Резолверы 3.2 НЕ делают mkdir — каталог создаёт писатель на месте записи (AC #7, риск №3).
+
+    Отличие get_mcp_output_dir от directaiq (там был mkdir): инвариант чистых резолверов.
+    """
+    monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path))
+
+    results = get_results_dir()
+    mcp_output = get_mcp_output_dir()
+
+    # Пути построены, но каталоги на диске не появились (резолвер чистый).
+    assert not results.exists()
+    assert not mcp_output.exists()
+    # Под корнем хранилища нет ни одного побочного каталога после вызова резолверов.
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_results_and_mcp_output_dirs_fail_loud_without_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Нет GDAU_DATA_ROOT → ValueError (fail-loud наследуется из get_storage_root, AC #7)."""
+    monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
+
+    with pytest.raises(ValueError, match=DATA_ROOT_ENV):
+        get_results_dir()
+    with pytest.raises(ValueError, match=DATA_ROOT_ENV):
+        get_mcp_output_dir()
 
 
 # --- AC #5: не задан / несуществующий корень → fail-loud БЕЗ side-effect ---------

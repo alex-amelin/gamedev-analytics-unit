@@ -7,15 +7,24 @@ view'ам ``visits``/``hits`` (2.6). Соединение всегда **read-on
 эмпирически (DuckDB 1.5.3) под ``read_only`` ``COPY … TO`` всё равно пишет файл, а ``PRAGMA``
 проходит, т.е. одного ``read_only`` недостаточно.
 
-# vendored from directaiq @ scripts/mcp/tools/core.py, seam: read-only + statement-guard;
-# trimmed: config_manager/placeholders/context/schema/export/audit/Direct-VAT-semantics → 3.2/3.3.
+# vendored from directaiq @ scripts/mcp/tools/core.py, seam: read-only + statement-guard +
+# guard внутреннего SQL экспорта + path-резолверы из нашего paths.py;
+# trimmed: config_manager/placeholders/context/Direct-VAT-semantics/schema-semantics → 3.3.
 Из directaiq перенесены форматтеры (``format_result_*``) и классификатор ошибок
 (``_format_sql_error``); добавлены statement-guard записи (риск №1/AC #7), watchdog-таймаут
 через ``conn.interrupt()`` (риск №2/AC #11 — ``statement_timeout``-PRAGMA в DuckDB нет),
 однократный retry на транзиентном чтении партиции (риск №4/AC #9) и кламп лимита
-``[1, MAX_LIMIT]`` (риск №5/AC #10 — авто-экспорта больших результатов в 3.1 ещё нет).
-**Не** перенесены спец-команды (``--context``/``--tables``/``--schema``/``--sample``/
-``--export``), goal-плейсхолдеры, audit и Direct/НДС-семантика — это 3.2/3.3.
+``[1, MAX_LIMIT]`` (риск №5/AC #10).
+
+3.2 нарастил **сервисный слой** поверх тонкого read-канала: роутинг спец-команд
+``--tables``/``--schema [TABLE]``/``--sample TABLE [N]``/``--export`` в :func:`handle_query`,
+авто-экспорт результатов ``> AUTO_EXPORT_THRESHOLD`` в :func:`execute_query`, общий
+COPY-хелпер :func:`_run_copy_export`, безопасный :func:`_export_query` (guard внутреннего
+SQL/расширение/traversal/клоббер), ``--schema`` plain через :func:`_handle_schema`,
+двух-слойная валидация имени таблицы (:func:`_validate_table_name` + проверка существования).
+**Не** перенесены (это 3.3): ``--context``/``_handle_context``, goal-плейсхолдеры/
+``config_manager``, Direct/НДС-семантика (``_COST_COLUMN_SEMANTICS``/``_annotate_money_column``)
+и семантика-аннотации в ``--schema`` (у нас plain колонки/типы — у геймдева Директа нет).
 """
 
 from __future__ import annotations
@@ -24,14 +33,18 @@ import json
 import logging
 import math
 import re
+import shlex
 import threading
 import time
 from collections.abc import Sequence
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import duckdb
 
 from scripts.utils.database_manager import DatabaseManager
+from scripts.utils.paths import get_results_dir
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +57,12 @@ __all__ = ["DEFAULT_LIMIT", "MAX_LIMIT", "execute_query", "handle_query"]
 DEFAULT_LIMIT = 100
 #: Жёсткий потолок строк в ответе агенту (риск №5/AC #10).
 MAX_LIMIT = 10_000
+#: Порог авто-экспорта (3.2, AC #2/#8): результат **строго >** порога уходит в файл вместо
+#: переполнения ответа; ≤ порога — inline. Считается по ``len(rows)`` (полный fetch), ОРТОГОНАЛЬНО
+#: дисплей-клампу ``_clamp_limit`` (риск №5): 500 → inline, 501 → авто-экспорт (граница без off-by-one).
+AUTO_EXPORT_THRESHOLD = 500
+#: Размер выборки ``--sample TABLE`` по умолчанию (3.2, AC #10): ``N`` отсутствует/нечисловой → столько строк.
+DEFAULT_SAMPLE = 5
 #: Верхняя граница времени исполнения запроса (риск №2/AC #11). Прерывание — watchdog-таймером
 #: + ``conn.interrupt()``: PRAGMA/SET ``statement_timeout`` в DuckDB 1.5.3 не существует.
 STATEMENT_TIMEOUT_S = 30.0
@@ -69,6 +88,14 @@ _READ_ONLY_LEADING_KEYWORDS = frozenset(
         "UNPIVOT",
     }
 )
+
+#: Санитизация имени таблицы (3.2, AC #4, слой 1): только буквы/цифры/подчёркивание —
+#: отсекает инъекцию/спецсимволы/пробелы через идентификатор ДО обращения к БД (вендоринг verbatim).
+_VALID_TABLE_NAME = re.compile(r"^[A-Za-z0-9_]+$")
+
+#: Допустимые расширения файла ``--export`` (3.2, AC #6): иное → отказ (НЕ молчаливое
+#: до-приписывание ``.csv`` как в directaiq).
+_EXPORT_EXTENSIONS = frozenset({".csv", ".parquet", ".json"})
 
 
 # --- Statement-guard записи (риск №1/AC #7) --------------------------------------------
@@ -346,6 +373,20 @@ def execute_query(
                 return "_Запрос выполнен (без результата)_"
             columns = [str(desc[0]) for desc in conn.description]
 
+            # Авто-экспорт (3.2, AC #2/#8): результат СТРОГО > порога не возвращаем inline (не
+            # переполняем ответ агента) — пишем в файл-результат и отдаём статус-сообщение. Порог по
+            # len(rows) (полный fetch), ортогонально display_limit (риск №5). Граница '>' без off-by-one:
+            # 500 → форматтер ниже, 501 → файл. conn УЖЕ открыт и запрос УЖЕ прошёл guard записи в начале
+            # функции — переиспользуем его для COPY (риск №2: без ВТОРОГО СОЕДИНЕНИЯ). NB: COPY (query)
+            # исполняет query ПОВТОРНО (это не повторный fetch тех же rows) — для детерминированной
+            # аналитики над статичными партициями ок; недетерминированный query даст в файле иной срез.
+            if len(rows) > AUTO_EXPORT_THRESHOLD:
+                auto_path = _auto_export_path()
+                # mkdir на месте записи (AC #7): резолвер пути чистый, каталог создаёт писатель.
+                get_results_dir().mkdir(parents=True, exist_ok=True)
+                exported = _run_copy_export(conn, query, auto_path, ".csv")
+                return f"Результат велик ({len(rows)} строк). {exported}"
+
             if fmt == "json":
                 return format_result_json(columns, rows, display_limit)
             if fmt == "csv":
@@ -370,14 +411,252 @@ def execute_query(
         return f"**Error:** {type(exc).__name__}: {exc!s}"
 
 
+# --- Сервисный слой 3.2: валидация имени, COPY-экспорт, схема, выборка -------------------
+
+
+def _validate_table_name(name: str) -> str | None:
+    """Санитизировать имя таблицы regex'ом ``^[A-Za-z0-9_]+$`` → имя или ``None`` (слой 1, AC #4).
+
+    Первый из двух слоёв (второй — :func:`_check_table_exists` против реальных объектов БД).
+    Отсекает инъекцию/спецсимволы/пробелы в идентификаторе ДО любого обращения к БД:
+    ``"visits; DROP TABLE …"`` / ``"a b"`` / ``"a'"`` не матчатся → ``None``.
+    """
+    candidate = name.strip()
+    if _VALID_TABLE_NAME.match(candidate):
+        return candidate
+    return None
+
+
+def _invalid_table_name_msg(raw: str) -> str:
+    """Понятный отказ на невалидное имя таблицы (слой 1 не пройден)."""
+    return (
+        f"Недопустимое имя таблицы {raw!r}: разрешены только латинские буквы, цифры и "
+        "подчёркивание (без пробелов и спецсимволов). Список объектов — команда `--tables`."
+    )
+
+
+def _check_table_exists(name: str) -> str | None:
+    """Текст ошибки, если таблицы ``name`` нет среди реальных объектов БД, иначе ``None`` (AC #4).
+
+    Слой 2 валидации (слой 1 — :func:`_validate_table_name` regex'ом): сверка с
+    ``information_schema.tables`` рабочего слоя. Открывает СВОЁ read-only соединение (двойное
+    обращение к БД — existence-check + сам запрос — приемлемо для «одного оператора», не
+    усложняем переиспользованием conn). Несуществующее имя → not-found СО СПИСКОМ известных (из
+    того же запроса), не сырой DuckDB-error. До первой выгрузки (нет ``gdau.duckdb``) →
+    дружелюбная подсказка про ``gdau-logs update`` (AC #8, паритет с :func:`execute_query`).
+    """
+    try:
+        with DatabaseManager.connection(read_only=True) as conn:
+            rows = conn.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'main' ORDER BY table_name"
+            ).fetchall()
+    except RuntimeError as exc:
+        # AC #8: БД ещё не создана → понятный текст «… gdau-logs update», не сырой IOException.
+        return str(exc)
+    except duckdb.Error as exc:
+        return _format_sql_error(exc, "")
+
+    known = [str(r[0]) for r in rows]
+    if name not in known:
+        known_list = ", ".join(f"`{t}`" for t in known) if known else "(объектов нет)"
+        return (
+            f"Таблица `{name}` не найдена. Известные объекты рабочего слоя: {known_list}. "
+            "Список — команда `--tables`."
+        )
+    return None
+
+
+def _run_copy_export(
+    conn: duckdb.DuckDBPyConnection, sql: str, output_path: Path, ext: str
+) -> str:
+    """Записать результат ``sql`` в ``output_path`` через ``COPY (…) TO`` и вернуть статус-текст.
+
+    Единый путь записи файла-результата для обоих сценариев (риск №2): авто-экспорт зовёт его с
+    **уже открытым** read-only ``conn`` (без второго соединения; сам ``query`` при этом исполняется
+    повторно внутри ``COPY (query)`` — это не повторный fetch уже полученных строк), ``--export`` —
+    со своим. Это **развязка от statement-guard** (риск №1): ``COPY`` строит СЕРВЕР с контролируемым
+    путём под ``data/results/`` (валидирован AC #5/#6), а НЕ сырой ввод агента — поэтому он
+    легитимно пишет файл-результат (под ``read_only=True`` ``COPY … TO`` пишет файл, эмпирика 3.1),
+    при этом ``gdau.duckdb`` не мутируется и ``.writer.lock`` не берётся. Формат COPY — по
+    расширению; путь в SQL-литерале экранируется удвоением ``'``.
+    """
+    safe_path = output_path.as_posix().replace("'", "''")
+    if ext == ".parquet":
+        copy_options = "(FORMAT PARQUET)"
+    elif ext == ".json":
+        copy_options = "(FORMAT JSON, ARRAY true)"
+    else:  # ".csv"
+        copy_options = "(HEADER, DELIMITER ',')"
+
+    conn.execute(f"COPY ({sql}) TO '{safe_path}' {copy_options}")
+    # Число записанных строк — пере-чтением файла-результата (форма directaiq); guard None у fetchone().
+    count_row = conn.execute(f"SELECT COUNT(*) FROM '{safe_path}'").fetchone()
+    row_count = int(count_row[0]) if count_row is not None else 0
+    return f"Экспортировано {row_count} строк в файл `{output_path.name}` (data/results/)."
+
+
+def _auto_export_path() -> Path:
+    """Путь авто-экспорта с таймстамп-именем: ``data/results/auto_export_{YYYYMMDD_HHMMSS}.csv``.
+
+    Серверное таймстамп-имя исключает молчаливый клоббер (AC #6) — коллизия возможна лишь при двух
+    экспортах в одну секунду; на этот случай добавляем микросекунды. Каталог создаёт вызывающий
+    (резолвер :func:`scripts.utils.paths.get_results_dir` чистый, без ``mkdir``).
+    """
+    results_dir = get_results_dir()
+    now = datetime.now()
+    candidate = results_dir / f"auto_export_{now.strftime('%Y%m%d_%H%M%S')}.csv"
+    if candidate.exists():
+        candidate = results_dir / f"auto_export_{now.strftime('%Y%m%d_%H%M%S_%f')}.csv"
+    return candidate
+
+
+def _export_query(sql: str, filename: str) -> str:
+    """Экспортировать результат read-SELECT в файл под ``data/results/`` (AC #5/#6/#7, риск №1/№4).
+
+    Дисциплина (строже directaiq): (1) внутренний SQL обязан пройти read-only guard 3.1 —
+    ``--export "DROP TABLE visits" x.csv`` отклоняется ДО построения ``COPY`` (риск №1,
+    defense-in-depth); (2) расширение ∈ {csv,parquet,json}, иначе отказ (НЕ до-приписывать ``.csv``,
+    AC #6); (3) путь принудительно под ``data/results/`` — ``(dir / filename).resolve()`` +
+    ``is_relative_to``, выход за пределы (абсолютный/``..``) → отказ (AC #5); (4) существующий файл →
+    отказ, без молчаливого клоббера (AC #6); (5) ``mkdir`` каталога на месте записи (AC #7); затем
+    свой read-only conn → :func:`_run_copy_export`. Ошибки ловятся ВНУТРИ и возвращаются строкой
+    (сервер жив, риск №6).
+    """
+    # Риск №1: внутренний SELECT экспорта прогоняем через guard записи (COPY-обёртку строит сервер,
+    # но вложенный пользовательский SQL обязан быть read-only — иначе экспорт стал бы каналом записи).
+    rejection = _reject_if_not_readonly(sql)
+    if rejection is not None:
+        return rejection
+
+    ext = Path(filename).suffix.lower()
+    if ext not in _EXPORT_EXTENSIONS:
+        shown = ext if ext else "(без расширения)"
+        return (
+            f"Недопустимое расширение файла экспорта: {shown}. Разрешены только "
+            ".csv / .parquet / .json — укажи имя файла с одним из них."
+        )
+
+    try:
+        results_dir = get_results_dir()
+        results_root = results_dir.resolve()
+        output_path = (results_dir / filename).resolve()
+        # AC #5: абсолютный путь / '..'-traversal уводят за пределы data/results/ → отказ.
+        if not output_path.is_relative_to(results_root):
+            return (
+                "Экспорт разрешён только внутрь data/results/: путь выходит за пределы "
+                "каталога результатов (абсолютный путь или '..' запрещены), файл не записан."
+            )
+        # Подкаталоги не поддерживаем: файл — строго прямой потомок data/results/. Иначе COPY упал бы
+        # сырым IOException (родитель не создан) с утечкой абсолютного пути хранилища → дружелюбный отказ.
+        if output_path.parent != results_root:
+            return (
+                "Имя файла экспорта не должно содержать подкаталогов — укажи простое имя "
+                "(результат кладётся прямо в data/results/), файл не записан."
+            )
+        # AC #6: молчаливый клоббер запрещён (в отличие от directaiq) — отказ с предложением имени.
+        if output_path.exists():
+            return (
+                f"Файл `{output_path.name}` уже существует в data/results/ — выбери другое "
+                "имя; существующий файл не перезаписывается."
+            )
+        results_dir.mkdir(parents=True, exist_ok=True)  # AC #7: каталог создаётся на месте записи
+        with DatabaseManager.connection(read_only=True) as conn:
+            return _run_copy_export(conn, sql, output_path, ext)
+    except RuntimeError as exc:
+        # AC #8: до первой выгрузки (нет gdau.duckdb) → дружелюбный текст, не «**Error:** RuntimeError».
+        return str(exc)
+    except duckdb.Error as exc:
+        return _format_sql_error(exc, sql)
+    except Exception as exc:
+        # Риск №6: ни ValueError битого корня, ни OSError ФС наружу не выпускаем — сервер жив.
+        return f"**Error:** {type(exc).__name__}: {exc!s}"
+
+
+def _handle_schema(table_name: str, output_format: str, limit: int) -> str:
+    """Схема одной таблицы — колонки и типы из ``information_schema`` (plain, БЕЗ семантики, риск №6).
+
+    Имя ``table_name`` уже прошло :func:`_validate_table_name` (``^[A-Za-z0-9_]+$``) и проверку
+    существования. В SQL — квотированный строковый ЛИТЕРАЛ имени (``execute_query`` принимает
+    только строку SQL, bind-параметр ``?`` не пробрасывается; regex + удвоение ``'`` → инъекция
+    невозможна). Один источник форматирования — :func:`execute_query`. 3.3 обогатит семантикой
+    каталога; здесь НЕ строим ``CASE … semantics`` и не зовём аннотаторы Direct/НДС.
+    """
+    safe_literal = table_name.replace("'", "''")
+    sql = (
+        "SELECT column_name, data_type FROM information_schema.columns "
+        f"WHERE table_schema = 'main' AND table_name = '{safe_literal}' "
+        "ORDER BY ordinal_position"
+    )
+    return execute_query(sql, output_format, limit)
+
+
+def _handle_sample(cleaned: str, output_format: str, limit: int) -> str:
+    """Роутинг ``--sample TABLE [N]``: валидация имени + существования, клампинг ``N`` (AC #1/#4/#10).
+
+    ``N`` ≥ 1 всегда: отсутствует/нечисловой → :data:`DEFAULT_SAMPLE`; ``'0'`` → ``max(1, 0) = 1``
+    (клампинг; отличие от directaiq, где ``LIMIT 0`` давал пустой результат). Проверка числа —
+    ``str.isdecimal()``, а НЕ ``isdigit()``: ``isdigit()`` истинно для юникод-надстрочных/дробных
+    (``²``/``⁵``), на которых ``int()`` бросает ``ValueError`` мимо try/except → падение инструмента;
+    ``isdecimal()`` ⊆ принимаемого ``int()``. Имя в SQL — квотированный идентификатор (``"name"``).
+    """
+    parts = cleaned.split()
+    # parts[0] == "--sample"; ожидаем имя в parts[1], опциональный N в parts[2].
+    if len(parts) < 2:
+        return "Использование: --sample TABLE [N] — укажи имя таблицы (N — число строк, ≥1)."
+
+    name = _validate_table_name(parts[1])
+    if name is None:
+        return _invalid_table_name_msg(parts[1])
+    existence_error = _check_table_exists(name)
+    if existence_error is not None:
+        return existence_error
+
+    sample_n = DEFAULT_SAMPLE
+    if len(parts) >= 3 and parts[2].isdecimal():
+        # isdecimal() (НЕ isdigit()): isdigit() пропускает юникод-надстрочные/дробные цифры (`²`,`⁵`),
+        # на которых int() бросает ValueError мимо try/except. isdecimal() ⊆ принимаемого int().
+        # '0' → max(1, 0) = 1 (а не пустой LIMIT 0); отрицательное/нечисловое → дефолт. N всегда ≥1 (AC #10).
+        sample_n = max(1, int(parts[2]))
+
+    safe_name = name.replace('"', '""')
+    sql = f'SELECT * FROM "{safe_name}" LIMIT {sample_n}'
+    return execute_query(sql, output_format, limit)
+
+
+def _handle_export(cleaned: str) -> str:
+    """Роутинг ``--export "SELECT …" file.{csv|parquet|json}``: разбор аргументов + :func:`_export_query`.
+
+    ``shlex.split`` (``posix=True`` по умолчанию) кросс-платформенно снимает кавычки вокруг SQL.
+    Меньше двух аргументов → usage-подсказка; битый разбор кавычек (:class:`ValueError`) → понятная
+    ошибка. Сами проверки безопасности (guard внутреннего SQL/расширение/traversal/клоббер) — в
+    :func:`_export_query`.
+    """
+    remainder = cleaned[len("--export ") :]
+    try:
+        args = shlex.split(remainder)
+    except ValueError as exc:
+        return (
+            f"Не удалось разобрать аргументы --export ({exc}). Формат: "
+            '--export "SELECT …" file.{csv|parquet|json} (запрос в кавычках).'
+        )
+    if len(args) < 2:
+        return (
+            'Использование: --export "SELECT …" file.{csv|parquet|json} — '
+            "укажи SQL-запрос в кавычках и имя файла."
+        )
+    return _export_query(args[0], args[1])
+
+
 def handle_query(
     query: str, output_format: str = "json", limit: int = DEFAULT_LIMIT
 ) -> str:
-    """Входная точка инструмента: пустой запрос → подсказка; иначе исполнить SQL.
+    """Входная точка инструмента: пустой запрос → подсказка; спец-команда → роутинг; иначе SQL.
 
-    В 3.1 — **только** произвольный SQL (роутинг спец-команд ``--context``/``--tables``/… добавит
-    3.2 поверх этой же функции). Если агент пришлёт ``--tables`` сейчас — уйдёт в DuckDB как SQL →
-    понятная синтаксическая ошибка (AC #6), не падение.
+    Роутинг спец-команд 3.2 (``--tables``/``--schema [TABLE]``/``--sample TABLE [N]``/``--export``)
+    идёт ПЕРЕД fall-through на произвольный SQL (:func:`execute_query`). Матчим по ``cleaned``
+    (``strip`` сделан здесь — повторно не делаем). ``--context`` (семантика каталога) — НЕ здесь,
+    это 3.3. Любой иной текст — обычный read-SQL к view'ам ``visits``/``hits``.
     """
     cleaned = (query or "").strip()
     if not cleaned:
@@ -385,4 +664,37 @@ def handle_query(
             "Пустой запрос. Пришли SQL к view'ам `visits`/`hits`, "
             "например: SELECT count(*) FROM visits."
         )
+
+    # --- Роутинг сервисных команд 3.2 (AC #1) — точные команды раньше префиксных ---
+    if cleaned == "--tables":
+        # Список таблиц/view рабочего слоя из information_schema (имена snake_case).
+        return execute_query(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'main' ORDER BY table_name",
+            output_format,
+            limit,
+        )
+    if cleaned == "--schema":
+        # Схема ВСЕХ объектов: таблица/колонка/тип (plain, без семантики — риск №6, 3.3 обогатит).
+        return execute_query(
+            "SELECT table_name, column_name, data_type FROM information_schema.columns "
+            "WHERE table_schema = 'main' ORDER BY table_name, ordinal_position",
+            output_format,
+            limit,
+        )
+    if cleaned.startswith("--schema "):
+        raw_name = cleaned[len("--schema ") :].strip()
+        name = _validate_table_name(raw_name)
+        if name is None:
+            return _invalid_table_name_msg(raw_name)
+        existence_error = _check_table_exists(name)
+        if existence_error is not None:
+            return existence_error
+        return _handle_schema(name, output_format, limit)
+    if cleaned.startswith("--sample "):
+        return _handle_sample(cleaned, output_format, limit)
+    if cleaned.startswith("--export "):
+        return _handle_export(cleaned)
+
+    # Fall-through: обычный произвольный read-SQL (как в 3.1) — guard внутри execute_query.
     return execute_query(cleaned, output_format, limit)

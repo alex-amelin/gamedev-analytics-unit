@@ -25,8 +25,12 @@ import duckdb
 import pytest
 
 from scripts.mcp.tools import core
+from scripts.utils.catalog import Catalog, CatalogField
 from scripts.utils.database_manager import DatabaseManager
 from scripts.utils.env_reader import DATA_ROOT_ENV
+from scripts.utils.parquet_store import write_partition
+from scripts.utils.paths import get_results_dir
+from scripts.utils.views import create_views
 
 
 @pytest.fixture
@@ -359,3 +363,297 @@ def test_markdown_cell_newline_does_not_break_row() -> None:
     out = core.format_result_markdown(["v"], [("line1\nline2",)], 10)
     data_rows = [ln for ln in out.splitlines() if ln.startswith("| line")]
     assert data_rows == ["| line1 line2 |"]  # перевод строки → пробел, ряд остался одной строкой
+
+
+# ========================================================================================
+# История 3.2: сервисные команды + авто-экспорт. Реалистичная фикстура — реальные view'ы
+# visits/hits через views.create_views (2.6) поверх tmp-партиций (2.2), как в test_views.py.
+# Существующая фикстура `db` (простая таблица) НЕ меняется — регресс 3.1 остаётся зелёным.
+# ========================================================================================
+
+
+def _catalog() -> Catalog:
+    """Мини-каталог visits/hits (типы реалистичны, как в test_views.py 2.6)."""
+    return Catalog(
+        fields=(
+            CatalogField("visits", "visit_id", "ym:s:visitID", "HUGEINT", "Идентификатор визита"),
+            CatalogField("visits", "client_id", "ym:s:clientID", "HUGEINT", "Аноним. идентификатор"),
+            CatalogField("visits", "watch_ids", "ym:s:watchIDs", "HUGEINT[]", "Просмотры визита"),
+            CatalogField("visits", "date", "ym:s:date", "DATE", "Дата визита"),
+            CatalogField("visits", "page_views", "ym:s:pageViews", "INTEGER", "Глубина просмотра"),
+            CatalogField("hits", "watch_id", "ym:pv:watchID", "HUGEINT", "Идентификатор события"),
+            CatalogField("hits", "goals_id", "ym:pv:goalsID", "BIGINT[]", "Номера целей"),
+            CatalogField("hits", "date", "ym:pv:date", "DATE", "Дата события"),
+        )
+    )
+
+
+_VISITS_COLUMNS = ["ym:s:visitID", "ym:s:clientID", "ym:s:watchIDs", "ym:s:date", "ym:s:pageViews"]
+_HITS_COLUMNS = ["ym:pv:watchID", "ym:pv:goalsID", "ym:pv:date"]
+
+
+@pytest.fixture
+def views_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Хранилище с реальными view'ами visits/hits + таблица со смешанным регистром (3.2).
+
+    visits — 6 строк (чтобы ``--sample`` default=5 проверялся на усечении), hits — 2 строки.
+    Дополнительно таблица ``Mixed_Case`` (имя с ``_`` и заглавными) — грунт под квотирование
+    идентификатора (AC #4). View'ы персистятся в gdau.duckdb write-conn'ом; MCP читает read-only.
+    """
+    monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path))
+    visits_rows = [[str(i), str(100 + i), "[1,2]", "2026-05-20", str(i)] for i in range(1, 7)]
+    write_partition("visits", "2026-05-20", _VISITS_COLUMNS, visits_rows, catalog=_catalog())
+    hits_rows = [["10", "[1]", "2026-05-20"], ["20", "[2]", "2026-05-20"]]
+    write_partition("hits", "2026-05-20", _HITS_COLUMNS, hits_rows, catalog=_catalog())
+    with DatabaseManager.connection() as conn:
+        create_views(conn, catalog=_catalog())
+        conn.execute('CREATE TABLE "Mixed_Case"(x INTEGER)')
+        conn.execute('INSERT INTO "Mixed_Case" VALUES (1), (2)')
+    return tmp_path
+
+
+# --- AC #1: сервис-команды --tables / --schema / --schema TABLE / --sample ---------------
+
+
+def test_tables_lists_visits_and_hits(views_db: Path) -> None:
+    """`--tables` → список объектов рабочего слоя, среди них visits и hits (AC #1)."""
+    parsed = json.loads(core.handle_query("--tables", "json", 100))
+    names = {row["table_name"] for row in parsed["rows"]}
+    assert {"visits", "hits"} <= names
+
+
+def test_schema_all_objects(views_db: Path) -> None:
+    """`--schema` (без таблицы) → схема всех объектов (table_name/column_name/data_type) (AC #1)."""
+    parsed = json.loads(core.handle_query("--schema", "json", 1000))
+    assert parsed["columns"] == ["table_name", "column_name", "data_type"]
+    assert {row["table_name"] for row in parsed["rows"]} >= {"visits", "hits"}
+
+
+def test_schema_single_table_columns_without_semantics(views_db: Path) -> None:
+    """`--schema visits` → колонки/типы visits, БЕЗ колонки semantics (риск №6 — 3.3, AC #1)."""
+    parsed = json.loads(core.handle_query("--schema visits", "json", 100))
+    # Ровно две колонки: имя и тип. Никакой колонки семантики/Direct/НДС (это 3.3).
+    assert parsed["columns"] == ["column_name", "data_type"]
+    col_names = {row["column_name"] for row in parsed["rows"]}
+    assert {"visit_id", "watch_ids", "page_views"} <= col_names
+    # Каждая строка несёт строго два поля — semantics не просочилась.
+    assert all(set(row.keys()) == {"column_name", "data_type"} for row in parsed["rows"])
+
+
+def test_sample_returns_n_rows(views_db: Path) -> None:
+    """`--sample visits 3` → не более 3 строк-примеров (AC #1)."""
+    parsed = json.loads(core.handle_query("--sample visits 3", "json", 100))
+    assert parsed["total_rows"] == 3
+
+
+# --- AC #4: not-found + инъекция через имя (двух-слойная валидация + квотирование) -------
+
+
+def test_schema_nonexistent_table_not_found(views_db: Path) -> None:
+    """`--schema nonexist` → понятный not-found со списком известных, не сырой DuckDB-error (AC #4)."""
+    out = core.handle_query("--schema nonexist", "json", 100)
+    assert "не найдена" in out
+    assert "**SQL Error" not in out  # не сырая ошибка движка
+    assert "visits" in out  # список известных объектов подсказан
+
+
+def test_sample_nonexistent_table_not_found(views_db: Path) -> None:
+    """`--sample nonexist` → not-found (слой 2: проверка существования, AC #4)."""
+    out = core.handle_query("--sample nonexist", "json", 100)
+    assert "не найдена" in out
+
+
+def test_schema_injection_via_name_rejected(views_db: Path) -> None:
+    """`--schema visits; DROP TABLE visits` → отклонено слоем 1 (regex), visits цела (AC #4)."""
+    out = core.handle_query("--schema visits; DROP TABLE visits", "json", 100)
+    assert "Недопустимое имя" in out
+    # visits не пострадала (инъекция не дошла до БД).
+    assert "visits" in core.handle_query("--tables", "json", 100)
+
+
+def test_sample_injection_via_name_rejected(views_db: Path) -> None:
+    """`--sample visits"; DROP` → спецсимволы в имени отклонены слоем 1 (AC #4)."""
+    out = core.handle_query('--sample visits"; DROP', "json", 100)
+    assert "Недопустимое имя" in out
+
+
+def test_sample_quoted_identifier_mixed_case_reads(views_db: Path) -> None:
+    """Имя с `_`/смешанным регистром (`Mixed_Case`) читается через квотирование `"name"` (AC #4)."""
+    parsed = json.loads(core.handle_query("--sample Mixed_Case", "json", 100))
+    assert parsed["total_rows"] == 2  # таблица найдена и прочитана, идентификатор квотирован
+
+
+# --- AC #2/#8: авто-экспорт >500, граница строго '>' (без off-by-one) --------------------
+
+
+def test_auto_export_above_threshold(views_db: Path) -> None:
+    """501 строка → авто-экспорт в data/results/ + статус-сообщение, не inline (AC #2/#8)."""
+    out = core.execute_query("SELECT * FROM range(501)", "json", 10)
+    assert "Результат велик (501 строк)" in out
+    assert "Экспортировано 501 строк" in out
+
+    files = list(get_results_dir().glob("auto_export_*.csv"))
+    assert len(files) == 1
+    # Файл содержит 501 строку данных + строка заголовка (CSV с HEADER).
+    assert len(files[0].read_text(encoding="utf-8").splitlines()) == 502
+
+
+def test_exactly_threshold_stays_inline(views_db: Path) -> None:
+    """Ровно 500 строк → inline (граница строго '>', 500 НЕ экспортируется, AC #8)."""
+    parsed = json.loads(core.execute_query("SELECT * FROM range(500)", "json", 1000))
+    assert parsed["total_rows"] == 500
+    # Файл авто-экспорта НЕ создан (off-by-one закреплён: 500 не > 500).
+    assert not list(get_results_dir().glob("auto_export_*.csv"))
+
+
+def test_mid_range_truncated_inline_not_exported(views_db: Path) -> None:
+    """300 строк при дефолтном limit=100 → усечено до 100 inline (has_more), файл НЕ создан (риск №5)."""
+    parsed = json.loads(core.execute_query("SELECT * FROM range(300)", "json", 100))
+    assert parsed["total_rows"] == 300
+    assert len(parsed["rows"]) == 100  # усечено дисплей-лимитом, не авто-экспортом
+    assert parsed["has_more"] is True
+    assert not list(get_results_dir().glob("auto_export_*.csv"))  # 300 ≤ 500 → не файл
+
+
+# --- AC #5: путь экспорта принудительно под data/results/ (traversal/abs → отказ) --------
+
+
+def test_export_parent_traversal_rejected(views_db: Path) -> None:
+    """`--export "SELECT 1" ../evil.csv` → отказ, файл вне data/results/ НЕ создан (AC #5)."""
+    out = core.handle_query('--export "SELECT 1" ../evil.csv')
+    assert "data/results/" in out
+    assert not (get_results_dir().parent / "evil.csv").exists()  # {root}/data/evil.csv не создан
+
+
+def test_export_absolute_path_rejected(views_db: Path, tmp_path: Path) -> None:
+    """`--export` с абсолютным путём → отказ, файл по абсолютному пути НЕ создан (AC #5)."""
+    outside = (tmp_path / "outside_evil.csv").as_posix()  # as_posix: shlex не съест разделители
+    out = core.handle_query(f'--export "SELECT 1" {outside}')
+    assert "data/results/" in out
+    assert not (tmp_path / "outside_evil.csv").exists()
+
+
+# --- AC #6: расширение валидируется; существующий файл не перезаписывается молча ----------
+
+
+def test_export_unknown_extension_rejected(views_db: Path) -> None:
+    """`--export … report.txt` → отказ; НЕ создаётся ни report.txt, ни до-приписанный report.txt.csv (AC #6)."""
+    out = core.handle_query('--export "SELECT 1" report.txt')
+    assert "расширение" in out.lower()
+    results = get_results_dir()
+    assert not (results / "report.txt").exists()
+    assert not (results / "report.txt.csv").exists()  # НЕ до-приписали .csv как directaiq
+
+
+def test_export_existing_file_not_clobbered(views_db: Path) -> None:
+    """`--export` в существующий файл → отказ, исходное содержимое цело (AC #6)."""
+    results = get_results_dir()
+    results.mkdir(parents=True, exist_ok=True)
+    (results / "existing.csv").write_text("original-content", encoding="utf-8")
+
+    out = core.handle_query('--export "SELECT 1" existing.csv')
+    assert "уже существует" in out
+    assert (results / "existing.csv").read_text(encoding="utf-8") == "original-content"
+
+
+def test_export_each_format_writes_file(views_db: Path) -> None:
+    """`.csv`/`.parquet`/`.json` → файл создан в data/results/ (AC #6 — валидные расширения)."""
+    for filename in ("out.csv", "out.parquet", "out.json"):
+        out = core.handle_query(f'--export "SELECT 1 AS x" {filename}')
+        assert "Экспортировано" in out, filename
+        assert (get_results_dir() / filename).exists(), filename
+
+
+# --- Риск №1: внутренний SQL экспорта проходит read-only guard (--export "DROP…" → отказ) -
+
+
+def test_export_internal_sql_must_be_readonly(views_db: Path) -> None:
+    """`--export "DROP TABLE visits" x.csv` → отказ guard'ом, visits цела, файл НЕ создан (риск №1)."""
+    out = core.handle_query('--export "DROP TABLE visits" leak.csv')
+    assert "только для чтения" in out
+    assert not (get_results_dir() / "leak.csv").exists()
+    # visits не удалена.
+    assert "visits" in core.handle_query("--tables", "json", 100)
+
+
+# --- AC #7: отсутствующий каталог data/results/ создаётся на месте записи -----------------
+
+
+def test_export_creates_missing_results_dir(views_db: Path) -> None:
+    """Нет data/results/ → `--export` создаёт каталог на месте записи (AC #7, риск №3)."""
+    results = get_results_dir()
+    assert not results.exists()  # фикстура каталог результатов не создаёт
+
+    out = core.handle_query('--export "SELECT 1 AS x" made.csv')
+    assert "Экспортировано" in out
+    assert results.exists()
+    assert (results / "made.csv").exists()
+
+
+# --- AC #8: команды до первой выгрузки → дружелюбная подсказка, не сырой RuntimeError -----
+
+
+def test_service_commands_before_data_friendly_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Хранилище без gdau.duckdb → все команды дают подсказку про `gdau-logs update` (AC #8)."""
+    monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path))  # каталог есть, БД ещё нет
+    for command in (
+        "--tables",
+        "--schema visits",
+        "--sample visits",
+        '--export "SELECT 1" x.csv',
+    ):
+        out = core.handle_query(command)
+        assert "gdau-logs update" in out, command
+        assert "**Error:** RuntimeError" not in out, command
+
+
+# --- AC #10: --sample N — дефолт и клампинг ----------------------------------------------
+
+
+def test_sample_default_n_is_five(views_db: Path) -> None:
+    """`--sample visits` без N → DEFAULT_SAMPLE=5 строк (visits содержит 6) (AC #10)."""
+    parsed = json.loads(core.handle_query("--sample visits", "json", 100))
+    assert parsed["total_rows"] == 5
+
+
+def test_sample_zero_clamped_to_one(views_db: Path) -> None:
+    """`--sample visits 0` → 1 строка (max(1,0)=1, НЕ пустой LIMIT 0 как directaiq) (AC #10)."""
+    parsed = json.loads(core.handle_query("--sample visits 0", "json", 100))
+    assert parsed["total_rows"] == 1
+
+
+def test_sample_negative_n_falls_back_to_default(views_db: Path) -> None:
+    """`--sample visits -3` → ≥1 (isdecimal()=False → дефолт 5), не пустой/не ошибка (AC #10)."""
+    parsed = json.loads(core.handle_query("--sample visits -3", "json", 100))
+    assert parsed["total_rows"] == 5
+
+
+# ========================================================================================
+# Code-review 2026-05-26: регресс-патчи P1 (юникод-цифра в --sample) и P3 (подкаталог --export)
+# ========================================================================================
+
+
+def test_sample_unicode_digit_does_not_crash(views_db: Path) -> None:
+    """`--sample visits ²` (юникод-надстрочная цифра U+00B2) НЕ роняет инструмент (P1, AC #10).
+
+    `'²'.isdigit()` == True, но `int('²')` бросает ValueError мимо try/except (он в execute_query,
+    а int() срабатывает ДО её вызова) → раньше исключение летело наружу из инструмента. `isdecimal()`
+    её отсеивает → падаем на DEFAULT_SAMPLE=5, результат строкой, сервер жив.
+    """
+    parsed = json.loads(core.handle_query("--sample visits ²", "json", 100))
+    assert parsed["total_rows"] == 5  # дефолт, а не исключение наружу
+
+
+def test_export_subdirectory_rejected(views_db: Path) -> None:
+    """`--export "…" sub/out.csv` (подкаталог) → дружелюбный отказ, не сырой IO Error (P3, AC #5).
+
+    Путь остаётся внутри data/results/ (is_relative_to=True), но mkdir не создаёт подкаталог →
+    раньше COPY падал сырым `**SQL Error:** IO Error … "<абс.путь>"` с утечкой пути хранилища.
+    Теперь — понятный отказ, файл и подкаталог не создаются.
+    """
+    out = core.handle_query('--export "SELECT 1 AS x" sub/out.csv')
+    assert "подкаталог" in out.lower()
+    assert "**SQL Error" not in out  # не сырая ошибка движка с утечкой абсолютного пути
+    assert not (get_results_dir() / "sub").exists()

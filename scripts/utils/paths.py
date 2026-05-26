@@ -43,6 +43,8 @@ __all__ = [
     "get_raw_partition_path",
     "get_raw_source_dir",
     "get_writer_lock_path",
+    "get_results_dir",
+    "get_mcp_output_dir",
 ]
 
 
@@ -124,6 +126,29 @@ def get_writer_lock_path() -> Path:
     Только путь — захват/освобождение лока это story 2.5, не здесь.
     """
     return get_storage_root() / ".writer.lock"
+
+
+def get_results_dir() -> Path:
+    """Каталог файлов-результатов экспорта: ``{root}/data/results`` (3.2, AC #7).
+
+    Сюда MCP-канал (3.2) пишет файлы ``--export`` и авто-экспорта больших результатов.
+    Чистая резолюция **без ``mkdir``** (инвариант модуля): каталог создаёт вызывающий код
+    на месте записи (``_export_query``/авто-экспорт в ``mcp/tools/core.py``) — резолвер лишь
+    строит путь под уже-провалидированным корнем хранилища (``get_storage_root`` fail-loud).
+    """
+    return get_storage_root() / "data" / "results"
+
+
+def get_mcp_output_dir() -> Path:
+    """Каталог audit-логов вызовов MCP: ``{root}/data/mcp_output`` (3.2, AC #7).
+
+    Сюда ``gdau_mcp_server._save_audit_log`` (3.2) пишет JSON-конверт каждого вызова
+    инструмента. Чистая резолюция **без ``mkdir``** — **осознанное отличие от directaiq**,
+    где одноимённый резолвер делал ``mkdir`` как побочный эффект: здесь инвариант «все
+    ``get_*`` чистые», а ``mkdir`` делает писатель (``_save_audit_log``), это storage,
+    не dev-репо.
+    """
+    return get_storage_root() / "data" / "mcp_output"
 
 
 def _require_valid_source(source: str) -> None:

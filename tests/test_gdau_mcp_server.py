@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,7 @@ import pytest
 from scripts.mcp import gdau_mcp_server as server
 from scripts.utils.database_manager import DatabaseManager
 from scripts.utils.env_reader import DATA_ROOT_ENV
+from scripts.utils.paths import get_mcp_output_dir
 
 
 @pytest.fixture
@@ -47,12 +49,16 @@ def test_tool_duckdb_query_registered() -> None:
     assert "duckdb_query" in tool_names
 
 
-def test_tool_annotations_read_only() -> None:
-    """Аннотации инструмента помечают канал read-only (в directaiq был False из-за --export, AC #3)."""
+def test_tool_annotations_not_read_only_after_export() -> None:
+    """3.2 перевернул readOnlyHint в False: --export/авто-экспорт пишут файлы (как directaiq).
+
+    БД при этом не мутируется → destructiveHint остаётся False (пишется отдельный файл-результат).
+    """
     tool = next(t for t in server.mcp._tool_manager.list_tools() if t.name == "duckdb_query")
     assert tool.annotations is not None
-    assert tool.annotations.readOnlyHint is True
+    assert tool.annotations.readOnlyHint is False  # перевёрнут vs 3.1 (там было True)
     assert tool.annotations.destructiveHint is False
+    assert tool.annotations.idempotentHint is True
 
 
 # --- AC #2/#3: инструмент через сервер исполняет SQL по read-only ------------------------
@@ -130,3 +136,77 @@ def test_core_imports_database_manager_not_writers() -> None:
         "scripts.utils.metrica_client",
     ):
         assert writer not in imported, f"core не должен импортировать путь записи {writer}"
+
+
+# --- 3.2 AC #3: каждый вызов инструмента пишет audit-конверт в data/mcp_output/ ----------
+
+
+def test_audit_log_written_on_call(db: Path) -> None:
+    """Вызов duckdb_query пишет JSON-конверт {tool, timestamp, parameters, result} (AC #3)."""
+    query = "SELECT visit_id FROM visits ORDER BY visit_id"
+    server.duckdb_query(query, "json", 10)
+
+    files = list(get_mcp_output_dir().glob("duckdb_query_*.json"))
+    assert len(files) == 1
+    envelope = json.loads(files[0].read_text(encoding="utf-8"))
+    assert envelope["tool"] == "duckdb_query"
+    assert isinstance(envelope["timestamp"], str) and envelope["timestamp"]
+    assert envelope["parameters"] == {"query": query, "format": "json", "limit": 10}
+    # result в json-формате распарсен и вложен объектом (не строкой).
+    assert envelope["result"]["total_rows"] == 2
+
+
+# --- 3.2 AC #9: сбой аудита не валит чтение (WARNING, не исключение, результат отдан) -----
+
+
+def test_audit_failure_warns_and_returns_result(
+    db: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Сбой записи аудита → WARNING, duckdb_query всё равно возвращает корректный результат (AC #9)."""
+    query = "SELECT visit_id FROM visits ORDER BY visit_id"
+
+    # Эталон без сбоя аудита (первый вызов пишет реальный конверт).
+    expected = server.duckdb_query(query, "json", 10)
+
+    # Ломаем аудит: get_mcp_output_dir (взят из scripts.utils.paths) бросает.
+    def boom() -> Path:
+        raise OSError("диск полон")
+
+    monkeypatch.setattr(server, "get_mcp_output_dir", boom)
+
+    with caplog.at_level(logging.WARNING):
+        out = server.duckdb_query(query, "json", 10)
+
+    # Результат идентичен эталону — сбой логирования НЕ повлиял на чтение.
+    assert out == expected
+    # Сбой зафиксирован WARNING (не except:pass directaiq, не сырой проброс).
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("audit-лог" in r.getMessage() for r in warnings)
+
+
+# --- 3.2: audit берёт get_mcp_output_dir из scripts.utils.paths, не из common ------------
+
+
+def test_audit_imports_paths_not_common() -> None:
+    """get_mcp_output_dir импортируется из scripts.utils.paths (НЕ directaiq utils/common, AC #5)."""
+    imported = _collect_imports(Path(server.__file__))
+    assert "scripts.utils.paths" in imported
+    assert "scripts.mcp.utils.common" not in imported
+    assert "get_mcp_output_dir" in imported
+
+
+# --- Code-review 2026-05-26 P2: два быстрых вызова → две записи (микросекунды в имени) ----
+
+
+def test_audit_log_two_rapid_calls_both_written(db: Path) -> None:
+    """Два вызова подряд пишут ДВА отдельных audit-файла, не перезапивая друг друга (P2, AC #3).
+
+    Раньше имя было с точностью до секунды → второй вызов в ту же секунду молча затирал первый
+    (потеря записи журнала). Микросекунды (`%f`) в имени исключают коллизию: журналируется КАЖДЫЙ.
+    """
+    query = "SELECT visit_id FROM visits ORDER BY visit_id"
+    server.duckdb_query(query, "json", 10)
+    server.duckdb_query(query, "json", 10)
+
+    files = list(get_mcp_output_dir().glob("duckdb_query_*.json"))
+    assert len(files) == 2  # обе записи сохранены (секундная коллизия имени исключена)

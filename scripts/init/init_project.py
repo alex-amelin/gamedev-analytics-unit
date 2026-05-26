@@ -3,7 +3,8 @@
 Роль. Одной командой ``gdau-init {game}`` поднимает рабочее пространство одной игры
 рядом с dev-репо (каталог-сосед ``../{game}``) за один проход: проверка свободного имени
 → копирование шаблона хранилища (4.2) → симлинки на инфру dev-репо по контракту + preflight
-(4.1) → генерация ``.env`` с корнем хранилища → ``uv sync --frozen`` → создание
+(4.1) → генерация ``.env`` с корнем хранилища → ``uv sync --frozen`` → ``.pth``-фикс
+(выставить пакет ``scripts`` на путь venv: editable из симлинков его не кладёт) → создание
 ``gdau.duckdb`` + типизированные view'ы из каталога (2.6) → ``git init`` + initial commit.
 На выходе хранилище готово к первой выгрузке — владельцу остаётся вписать токен/счётчик в
 ``.env`` (FR-19).
@@ -67,6 +68,11 @@ NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 # Потолок ожидания `uv sync --frozen` (сек) — против вечного зависания на сетевом резолве.
 UV_SYNC_TIMEOUT = 300
+
+# Имя .pth-файла в venv хранилища, выставляющего пакет `scripts` на путь импорта (фикс
+# editable из симлинк-раскладки, см. _write_scripts_pth). Ведущий `_` → site.py обрабатывает
+# его РАНЬШЕ `pywin32.pth`, чья namespace-папка `win32/scripts` иначе перехватила бы импорт.
+SCRIPTS_PTH_NAME = "_gdau_scripts.pth"
 
 
 class StorageInitError(RuntimeError):
@@ -230,6 +236,48 @@ def _uv_sync(storage_root: Path, run: CommandRunner) -> None:
         )
 
 
+def _venv_site_packages(storage_root: Path) -> Path | None:
+    """Найти site-packages venv хранилища кросс-платформенно (Windows ``Lib`` / POSIX ``lib``).
+
+    После ``uv sync`` каталог уже создан: Windows → ``.venv/Lib/site-packages``; POSIX →
+    ``.venv/lib/pythonX.Y/site-packages``. Возвращает первый существующий каталог или ``None``
+    (``glob`` на отсутствующем ``lib`` пуст — не падает). Чистая ФС-резолюция, без побочных эффектов.
+    """
+    venv = storage_root / ".venv"
+    candidates = [venv / "Lib" / "site-packages"]
+    candidates.extend(sorted((venv / "lib").glob("python*/site-packages")))
+    return next((c for c in candidates if c.is_dir()), None)
+
+
+def _write_scripts_pth(storage_root: Path) -> None:
+    """Выставить пакет ``scripts`` на путь импорта venv хранилища через ``.pth`` (фикс editable).
+
+    ``uv sync`` ставит проект editable, НО ``scripts``/``pyproject.toml`` в хранилище — симлинки,
+    и editable-wheel hatchling НЕ кладёт path-hook на пакет ``scripts`` (в RECORD dist-info — лишь
+    console-скрипты + метаданные). Без него ``gdau-logs``/``gdau-init`` из venv хранилища падают
+    ``ModuleNotFoundError: scripts.tools`` (``scripts`` тогда резолвится в чужую namespace-папку
+    ``win32/scripts`` из pywin32). Кладём в site-packages ``.pth`` с корнем хранилища: ``import
+    scripts`` идёт через симлинк ``{storage_root}/scripts`` → dev-репо. Регулярный пакет (с
+    ``__init__.py``) приоритетнее namespace-каталога pywin32 (PEP 420) → коллизии нет; имя с
+    ведущим ``_`` обрабатывается site.py раньше ``pywin32.pth`` (доп. страховка по порядку).
+
+    ``.venv`` хранилища в git не попадает (игнорируется) → файл — рантайм-артефакт окружения.
+    site-packages не найден (``uv sync`` обязан был создать окружение) или запись не удалась →
+    :class:`StorageInitError` (полный откат хранилища — у :func:`init_storage`).
+    """
+    site_packages = _venv_site_packages(storage_root)
+    if site_packages is None:
+        raise StorageInitError(
+            f"Не найден site-packages в venv {storage_root / '.venv'} — `uv sync` не создал "
+            f"окружение? Повтори gdau-init."
+        )
+    pth = site_packages / SCRIPTS_PTH_NAME
+    try:
+        pth.write_text(f"{storage_root}\n", encoding="utf-8")
+    except OSError as exc:
+        raise StorageInitError(f"Не удалось записать {pth}: {exc}") from exc
+
+
 def _create_database(storage_root: Path) -> None:
     """Создать ``gdau.duckdb`` + типизированные view'ы из каталога под ``.writer.lock`` (AC #1, #14).
 
@@ -353,6 +401,7 @@ def init_storage(
     игры; ``None`` → сосед dev-репо), ``runner`` (запуск ``git``/``uv``; ``None`` →
     :func:`_default_runner`). Порядок (D6): валидация имени → резолюция пути → «имя свободно» →
     preflight'ы (git/uv/симлинки) ДО создания → шаблон → симлинки → ``.env`` → ``uv sync`` →
+    ``.pth`` (выставить ``scripts`` на путь venv) →
     БД+view'ы → ``git``. Любой сбой шагов после копирования шаблона (включая ``KeyboardInterrupt``)
     → :func:`_rollback` (полное удаление хранилища) + проброс исходной ошибки.
     """
@@ -390,6 +439,9 @@ def init_storage(
         _write_env(storage_root)
         logger.info("Ставлю окружение хранилища: uv sync --frozen")
         _uv_sync(storage_root, run)
+        # editable-wheel из симлинк-раскладки не выставляет пакет scripts → .pth-фикс,
+        # иначе gdau-logs/gdau-init из venv хранилища падают ModuleNotFoundError.
+        _write_scripts_pth(storage_root)
         logger.info("Создаю gdau.duckdb и типизированные view'ы из каталога")
         _create_database(storage_root)
         logger.info("Инициализирую git-репозиторий хранилища (без .env)")

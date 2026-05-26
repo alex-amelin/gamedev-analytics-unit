@@ -28,10 +28,12 @@ import duckdb
 import pytest
 
 from scripts.init.init_project import (
+    SCRIPTS_PTH_NAME,
     StorageInitError,
     _create_parser,
     _resolve_storage_root,
     _validate_game_name,
+    _write_scripts_pth,
     init_storage,
 )
 from scripts.init.scaffold import StorageTemplateError
@@ -107,7 +109,9 @@ def _real_git_fake_uv(
     ) -> subprocess.CompletedProcess[str]:
         calls.append(list(args))
         if args[:2] == ["uv", "sync"]:
-            (cwd / ".venv").mkdir(exist_ok=True)
+            # Симулируем uv sync как реальный uv: создаём .venv с site-packages — туда init
+            # пишет _gdau_scripts.pth (фикс editable из симлинк-раскладки).
+            (cwd / ".venv" / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True)
             return subprocess.CompletedProcess(args, 0, "", "")
         return subprocess.run(args, cwd=cwd, capture_output=True, text=True, check=False)
 
@@ -262,6 +266,12 @@ def test_full_init_pass(
     # uv sync --frozen был вызван (AC #1).
     assert ["uv", "sync", "--frozen"] in calls
 
+    # .pth-фикс editable: пакет scripts выставлен на путь venv хранилища (без него gdau-logs/
+    # gdau-init из папки игры падали ModuleNotFoundError). Содержимое = корень хранилища.
+    pth = storage_root / ".venv" / "Lib" / "site-packages" / SCRIPTS_PTH_NAME
+    assert pth.is_file(), "нет _gdau_scripts.pth — фикс editable не применён"
+    assert pth.read_text(encoding="utf-8").strip() == str(storage_root)
+
     # gdau.duckdb создан; view'ы visits/hits существуют и пусты-типизированы (AC #1, #14).
     db_path = storage_root / "data" / "duckdb" / "gdau.duckdb"
     assert db_path.is_file()
@@ -291,6 +301,36 @@ def _env_value(env_text: str, var: str) -> str | None:
         if line.startswith(f"{var}="):
             return line.split("=", 1)[1].strip()
     return None
+
+
+# --- Фикс editable: .pth выставляет пакет scripts на путь venv хранилища ----------------
+
+
+def test_write_scripts_pth_windows_layout(tmp_path: Path) -> None:
+    """Windows-раскладка venv (``Lib/site-packages``) → ``.pth`` с корнем хранилища.
+
+    Регрессия: editable-wheel из симлинк-раскладки не выставляет ``scripts`` — без ``.pth``
+    ``gdau-logs`` из venv хранилища падал ``ModuleNotFoundError: scripts.tools``.
+    """
+    sp = tmp_path / ".venv" / "Lib" / "site-packages"
+    sp.mkdir(parents=True)
+    _write_scripts_pth(tmp_path)
+    assert (sp / SCRIPTS_PTH_NAME).read_text(encoding="utf-8").strip() == str(tmp_path)
+
+
+def test_write_scripts_pth_posix_layout(tmp_path: Path) -> None:
+    """POSIX-раскладка venv (``lib/pythonX.Y/site-packages``) → ``.pth`` найден и записан."""
+    sp = tmp_path / ".venv" / "lib" / "python3.13" / "site-packages"
+    sp.mkdir(parents=True)
+    _write_scripts_pth(tmp_path)
+    assert (sp / SCRIPTS_PTH_NAME).read_text(encoding="utf-8").strip() == str(tmp_path)
+
+
+def test_write_scripts_pth_missing_site_packages_fails_loud(tmp_path: Path) -> None:
+    """Нет site-packages (``uv sync`` не создал окружение) → ``StorageInitError`` fail-loud."""
+    (tmp_path / ".venv").mkdir()  # venv без site-packages
+    with pytest.raises(StorageInitError, match="site-packages"):
+        _write_scripts_pth(tmp_path)
 
 
 # --- AC #6, #10, #12: полный откат хранилища при сбое шага -------------------------------

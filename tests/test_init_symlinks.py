@@ -246,11 +246,20 @@ def test_cross_drive_relpath_wrapped_in_symlink_error(
 def test_shipped_contract_loads_and_targets_exist() -> None:
     """Реальный templates/paths-to-symlink.csv грузится и все его цели существуют в dev-репо (AC #1, #5).
 
-    Страж от преждевременных записей (.mcp.json/.claude/* отложены до 4.3): если бы shipped-CSV
-    называл несуществующую цель, gdau-init 4.3 упал бы SymlinkTargetMissingError.
+    Страж от преждевременных записей: если бы shipped-CSV называл несуществующую цель, gdau-init
+    (4.3) упал бы SymlinkTargetMissingError. Состав финализирован в 4.3 (D11, решение Шефа): к
+    4 стабильным целям добавлены `uv.lock` (нужен для `uv sync --frozen` в хранилище) и `.mcp.json`
+    (канал чтения игры — Epic 3 влит, артефакт существует); `.claude` отложен (dev-скилы, не рантайм).
     """
     rel_paths = load_symlink_contract()  # дефолтный путь = DEFAULT_CONTRACT_PATH
-    assert rel_paths == ["scripts", "development-docs", "yandex-docs", "pyproject.toml"]
+    assert rel_paths == [
+        "scripts",
+        "development-docs",
+        "yandex-docs",
+        "pyproject.toml",
+        "uv.lock",
+        ".mcp.json",
+    ]
     dev_repo_root = DEFAULT_CONTRACT_PATH.resolve().parents[1]
     for rel in rel_paths:
         assert (dev_repo_root / rel).exists(), f"shipped-цель отсутствует: {rel}"

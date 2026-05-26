@@ -30,6 +30,7 @@ data/
 /development-docs
 /yandex-docs
 /pyproject.toml
+/uv.lock
 /.mcp.json
 /.claude
 

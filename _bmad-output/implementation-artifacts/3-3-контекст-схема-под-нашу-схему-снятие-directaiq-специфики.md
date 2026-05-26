@@ -1,6 +1,6 @@
 # Story 3.3: Контекст/схема под нашу схему — снятие directaiq-специфики
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -92,44 +92,44 @@ directaiq `_handle_context` **пропускал `COUNT(*)` для VIEW** (`NULL
 
 ## Tasks / Subtasks
 
-- [ ] **Task 0 — Предусловие: 3.1 И 3.2 реализованы и влиты; прочитать фактический код (риск №2)**
-  - [ ] 3.2 уже реализована и доступна в рабочем дереве (`review` на момент создания 3.3): роутинг `handle_query`, `_handle_schema` plain, `_validate_table_name`/`_check_table_exists`, `readOnlyHint=False`, аудит. **Ветвить 3.3 от ветки/коммита с кодом 3.2** (после её code-review+merge — от обновлённого `main`). Если на твоём дереве сервисного слоя 3.2 НЕТ — сначала получить его (3.3 расширять нечего).
-  - [ ] Прочитать фактические `scripts/mcp/tools/core.py` + `scripts/mcp/gdau_mcp_server.py` ПОСЛЕ 3.2: форму `handle_query`-роутинга, сигнатуру `_handle_schema`, `_validate_table_name`, блок констант, `__all__`. Контракт ниже сверить с фактом (план 3.2 мог уточниться на ревью).
-  - [ ] Прочитать `scripts/utils/catalog.py`: `load_catalog(path=None)`, `Catalog.fields_for(source)`, `CatalogField.description`, `VALID_SOURCES` (это источник семантики).
-- [ ] **Task 1 — `_handle_context` + роутинг `--context` (`scripts/mcp/tools/core.py` UPDATE; AC #1/#2/#7/#8/#9)**
-  - [ ] Обновить шапку-пометку вендоринга: 3.3 принёс `_handle_context` (механика information_schema/COUNT/MIN-MAX/markdown адаптирована) + семантику колонок **из каталога**; `trimmed:` теперь **закрыт** — `_COST_COLUMN_SEMANTICS`/`_annotate_money_column`/`_GENERIC_MONEY_COL_RE`/`process_sql_placeholders`/`get_config`/goal-плейсхолдеры/`config_manager` **не переносятся вовсе** (см. риск №1).
-  - [ ] Импорт `from scripts.utils.catalog import load_catalog, VALID_SOURCES` (наш модуль, не config_manager — ast-тест проходит).
-  - [ ] **`Catalog.descriptions(source) -> dict[str, str]` (`scripts/utils/catalog.py` UPDATE, риск №3 — решение зафиксировано):** зеркало `duckdb_types`: `return {f.storage_name: f.description for f in self.fields_for(source)}`; русский докстринг (как у соседей); +тест в `tests/test_catalog.py`. Аддитивный чистый аксессор — существующие методы/валидацию каталога НЕ трогать.
-  - [ ] **`_handle_context() -> str`** (новое): своя `DatabaseManager.connection(read_only=True)`; объекты/колонки/типы из `information_schema` (`table_schema='main'`); per-object `COUNT(*)` (и для view'ов — риск №5) + `MIN`/`MAX` по date-подобной колонке (тип `DATE`/`TIMESTAMP` или имя `date`; квотировать `"…"`); семантика из каталога по источнику (риск №3, `dict.get` → AC #8); сборка markdown (`### {obj} ({N} строк[, dmin…dmax])` + `- col: type — semantics`). **БЕЗ** секций Money/Goal/Config. Каталог-ошибка → AC #7 (ловить `ValueError` от `load_catalog` → строка). Пустые → AC #9 (0/`NULL`).
-  - [ ] **`_handle_context` ловит все ошибки в строку (риск №6 — паритет с `execute_query`):** функция зовётся **напрямую** из `handle_query` (НЕ через `execute_query`) → голое исключение порвёт MCP-сессию. Обернуть: `except RuntimeError → str(exc)` (до создания БД `DatabaseManager` бросает «… gdau-logs update» — дружелюбный текст, паритет AC #8), `except ValueError → str(exc)` (**покрывает И битый/недоступный каталог `load_catalog` AC #7, И битый/незаданный `GDAU_DATA_ROOT` из `paths.get_storage_root` — это один класс**; не делать `except` только под каталог), `except duckdb.Error → _format_sql_error(exc, "--context")`, `except Exception → "**Error:** …"`.
-  - [ ] **`handle_query` (UPDATE):** добавить `if cleaned == "--context": return _handle_context()` в роутинг 3.2 (по `cleaned`, ПЕРЕД fall-through `execute_query`). Точное равенство. `_handle_context` **приватна** — НЕ расширять `__all__` (как весь сервисный слой 3.2: `_handle_schema`/`_validate_table_name` не экспортированы); тестировать через `core.handle_query("--context", …)`.
-- [ ] **Task 2 — Обогащение `_handle_schema` семантикой каталога (`core.py` UPDATE; AC #2/#7/#8)**
-  - [ ] **Аддитивно** дополнить существующий `_handle_schema` (3.2 на диске) колонкой `semantics` — НЕ переписывать целиком: загрузить каталог (ошибка → AC #7); `desc = catalog.descriptions(table_name)` если `table_name in VALID_SOURCES`, иначе `{}`; собрать `CASE WHEN column_name='{col}' THEN '{escaped_desc}' … ELSE NULL END AS semantics` (экранировать `'`→`''`; нет ключа/пустое описание → ветку пропустить; WARNING на несопоставленные — AC #8); итог `SELECT column_name, data_type, {semantics_expr} AS semantics FROM information_schema.columns WHERE table_schema = 'main' AND table_name='{name}' ORDER BY ordinal_position` → `execute_query(...)`. ⚠️ **СОХРАНИТЬ фильтр `table_schema = 'main'`** (он есть в 3.2-коде — не потерять, КРИТ риск регрессии). **НЕ** `_annotate_money_column`/`_COST_COLUMN_SEMANTICS`/regex (риск №1/№4).
-  - [ ] Существование таблицы (AC #4 3.2) + квотирование имени — **переиспользовать из 3.2**, не дублировать.
-- [ ] **Task 3 — Снятие directaiq-специфики = ASSERT + сервер docstring/Field (`gdau_mcp_server.py` UPDATE; AC #3/#4/#5/#6)**
-  - [ ] **Ничего не удалять** (риск №1): `_COST_COLUMN_SEMANTICS`/`_annotate_money_column`/`_GENERIC_MONEY_COL_RE`/`process_sql_placeholders`/`get_config`/`config_manager`/`common.py` в репо отсутствуют. Работа — закрепить отсутствие тестами (Task 5).
-  - [ ] **`Field`/docstring инструмента (UPDATE):** добавить в рекламу `--context` (авто-контекст: таблицы/типы/row counts/диапазоны дат + семантика колонок из каталога) и упомянуть, что `--schema TABLE` теперь несёт `semantics`. **НЕ** упоминать Direct/НДС/goal-плейсхолдеры/`{{…}}`/`t10_*`/`t18_*`.
-  - [ ] **НЕ** менять `readOnlyHint` (после 3.2 = `False`, канал пишет файлы экспорта) и **НЕ** трогать `_save_audit_log` (3.2). 3.3 — только дополнение docstring/`Field`.
-- [ ] **Task 4 — Спека `docs/mcp-query.md` (UPDATE; часть DoD)**
-  - [ ] Дополнить (3 вопроса project-context): **что делает** — `--context` (обзор рабочего слоя: объекты, колонки/типы, сколько строк, за какие даты) + семантика колонок «что означает поле» из каталога в `--context`/`--schema TABLE`; **зачем** — ориентироваться без ручных подсказок, без неприменимой Direct/НДС-семантики; **контракт** — семантика согласована с каталогом схемы (SSOT), каталог битый → понятная ошибка, лок писателя по-прежнему не берётся. Снять из раздела «Границы» пункт про 3.3 (Epic 3 закрыт).
-- [ ] **Task 5 — Тесты (`tests/test_mcp_core.py` + `tests/test_gdau_mcp_server.py` UPDATE)**
-  - [ ] Фикстура: переиспользовать/расширить `views_db` 3.2 (`tmp_path` + `monkeypatch.setenv(DATA_ROOT_ENV, …)`; view'ы `visits`/`hits` через `create_views` поверх tmp-партиции; уже несёт таблицу `Mixed_Case`). **Добавить `load_state`** в фикстуру `--context` через `scripts.utils.load_state.ensure_load_state_table(conn)` — иначе AC #1 (`load_state` в выводе) и AC #8 (`load_state`-колонки → unknown) непроверяемы (в `views_db` его НЕТ). Каталог для AC #7/#8 — мини-CSV через `load_catalog(path=…)`-инъекцию (риск №7).
-  - [ ] **AC #1:** `--context` → присутствуют секции `visits`/`hits`/`load_state` (проверять по **вхождению**/`>=`, НЕ точным набором объектов — в фикстуре есть и `Mixed_Case`), колонки с типами, `row_count`, диапазон дат (заполненный для непустого источника). `MIN`/`MAX` даты — строкой (CAST AS VARCHAR / isoformat), не repr объекта date.
-  - [ ] **AC #2:** семантика колонки в `--context` и `--schema visits` совпадает с `description` каталога (напр. `visit_id` → его описание); `--schema visits` несёт колонку `semantics`.
-  - [ ] **AC #2 (КРИТ — обновить сломанный тест 3.2):** `test_schema_single_table_columns_without_semantics` (3.2, `test_mcp_core.py`) жёстко требует `columns == ["column_name","data_type"]` и `set(row.keys()) == {"column_name","data_type"}` → обогащение `semantics` его **ломает**. Это **ожидаемая смена контракта 3.2→3.3, НЕ регрессия**: переименовать тест (убрать `without_semantics`), ждать `columns == ["column_name","data_type","semantics"]`, проверять `semantics` для `visit_id` == описание каталога. _(Это единственный тест 3.2, который 3.3 правомерно меняет; остальные — зелёные без изменений.)_
-  - [ ] **AC #3/#4/#6 (guard отсутствия):** в `scripts/mcp/tools/core.py` НЕТ строк `_COST_COLUMN_SEMANTICS`/`_annotate_money_column`/`_GENERIC_MONEY_COL_RE`/`process_sql_placeholders`/`get_config`/`{{PRIMARY_GOAL_ID}}`/`{{DATE_30D}}`; ast: `scripts/mcp/**` не импортирует `config_manager`/`auth_manager`/`directaiq`/`scripts.mcp.utils.common` (как 3.1, по import-узлам, не подстрокой); сервер импортируется/регистрирует `duckdb_query` без `config_manager` (нет `ImportError`).
-  - [ ] **AC #5 (регресс):** `--tables`/`--schema`/`--schema TABLE`/`--sample`/`--export` (3.2) и произвольный SQL (3.1) работают как прежде; `duckdb_query(query, format, limit)` сигнатура цела.
-  - [ ] **AC #7:** битый каталог (несуществующий путь / `load_catalog` бросает) → `--context` и `--schema visits` отдают понятную ошибку строкой (сервер жив), НЕ полу-контекст.
-  - [ ] **AC #8:** объект без записей в каталоге (`load_state`) → колонки с пустой/«unknown» семантикой (без `KeyError`); колонка view, которой нет в каталоге → то же + WARNING.
-  - [ ] **AC #9:** пустые view'ы (нет партиций) → `--context` даёт `row_count=0` и пустой/`null` диапазон дат, без падения.
-  - [ ] **Риск №6 (до данных):** `--context` на хранилище без `gdau.duckdb` → дружелюбная подсказка про `gdau-logs update` строкой (не сырой `RuntimeError`/трейсбек), сервер жив.
-  - [ ] **`tests/test_catalog.py`** (UPDATE): `Catalog.descriptions(source)` → `{storage_name: description}` источника (порядок не важен); невалидный `source` → `ValueError` (наследуется из `fields_for`). Существующую валидацию каталога не трогать.
-  - [ ] Существующие тесты 3.1/3.2 (guard/clamp/timeout/retry/роутинг/авто-экспорт/аудит) — оставить зелёными; **единственное правомерное изменение** — `test_schema_single_table_columns_without_semantics` (см. выше, смена контракта). Остальные добавление `--context`/semantics не ломает.
-- [ ] **Гейты перед сдачей**
-  - [ ] `uv run mypy scripts` → зелено (`strict=true`; новые функции типизированы; `fetchone()`/`fetchall()` → guard `None`; матрица CI ubuntu+windows, локально доп. `--platform linux`).
-  - [ ] `uv run pytest` (offline) → зелено; маркер `live` не вводится (MCP-контекст в Logs API не ходит).
-  - [ ] `uv.lock`/`pyproject.toml` не менялись (`mcp`/`duckdb`/`pydantic`/`python-dotenv` уже есть; `re`/`json` — stdlib; каталог — наш `catalog.py`).
-  - [ ] Чек-лист «Definition of Done» пройден; `docs/mcp-query.md` обновлён.
+- [x] **Task 0 — Предусловие: 3.1 И 3.2 реализованы и влиты; прочитать фактический код (риск №2)**
+  - [x] 3.2 уже реализована и доступна в рабочем дереве (`review` на момент создания 3.3): роутинг `handle_query`, `_handle_schema` plain, `_validate_table_name`/`_check_table_exists`, `readOnlyHint=False`, аудит. **Ветвить 3.3 от ветки/коммита с кодом 3.2** (после её code-review+merge — от обновлённого `main`). Если на твоём дереве сервисного слоя 3.2 НЕТ — сначала получить его (3.3 расширять нечего). _(3.2 влита в `main` — PR #17, commit 6bc45fc; ветка `story/3.3-mcp-context-schema` от обновлённого main — сервисный слой 3.2 на диске.)_
+  - [x] Прочитать фактические `scripts/mcp/tools/core.py` + `scripts/mcp/gdau_mcp_server.py` ПОСЛЕ 3.2: форму `handle_query`-роутинга, сигнатуру `_handle_schema`, `_validate_table_name`, блок констант, `__all__`. Контракт ниже сверить с фактом (план 3.2 мог уточниться на ревью). _(Сверено: `handle_query` роутит по `cleaned` `--tables`/`--schema [TABLE]`/`--sample`/`--export` перед `execute_query`; `_handle_schema(table_name, output_format, limit)` plain с фильтром `table_schema='main'`; `__all__` = DEFAULT_LIMIT/MAX_LIMIT/execute_query/handle_query — приватные не экспортированы.)_
+  - [x] Прочитать `scripts/utils/catalog.py`: `load_catalog(path=None)`, `Catalog.fields_for(source)`, `CatalogField.description`, `VALID_SOURCES` (это источник семантики). _(Подтверждено: `load_catalog` бросает ValueError на missing/битый; `fields_for` валидирует source fail-loud; докстринг метит `fields_for` как MCP-контекст 3.3.)_
+- [x] **Task 1 — `_handle_context` + роутинг `--context` (`scripts/mcp/tools/core.py` UPDATE; AC #1/#2/#7/#8/#9)**
+  - [x] Обновить шапку-пометку вендоринга: 3.3 принёс `_handle_context` (механика information_schema/COUNT/MIN-MAX/markdown адаптирована) + семантику колонок **из каталога**; `trimmed:` теперь **закрыт** — `_COST_COLUMN_SEMANTICS`/`_annotate_money_column`/`_GENERIC_MONEY_COL_RE`/`process_sql_placeholders`/`get_config`/goal-плейсхолдеры/`config_manager` **не переносятся вовсе** (см. риск №1).
+  - [x] Импорт `from scripts.utils.catalog import VALID_SOURCES, load_catalog` (наш модуль, не config_manager — ast-тест проходит).
+  - [x] **`Catalog.descriptions(source) -> dict[str, str]` (`scripts/utils/catalog.py` UPDATE, риск №3 — решение зафиксировано):** зеркало `duckdb_types`: `return {f.storage_name: f.description for f in self.fields_for(source)}`; русский докстринг (как у соседей); +тест в `tests/test_catalog.py`. Аддитивный чистый аксессор — существующие методы/валидацию каталога НЕ трогать.
+  - [x] **`_handle_context() -> str`** (новое): своя `DatabaseManager.connection(read_only=True)`; объекты/колонки/типы из `information_schema` (`table_schema='main'`); per-object `COUNT(*)` (и для view'ов — риск №5) + `MIN`/`MAX` по date-подобной колонке (`_first_date_like_column`: тип `DATE`/`TIMESTAMP` или имя `date`; квотировать `"…"`; CAST AS VARCHAR); семантика из каталога по источнику (риск №3, `dict.get` → AC #8); сборка markdown (`### {obj} ({N} строк[, dcol: dmin … dmax])` + `- col: type — semantics`). **БЕЗ** секций Money/Goal/Config.
+  - [x] **`_handle_context` ловит все ошибки в строку (риск №6 — паритет с `execute_query`):** `except RuntimeError → str(exc)` (до данных «… gdau-logs update»), `except ValueError → "Каталог схемы недоступен: …"` (покрывает И битый каталог AC #7, И битый `GDAU_DATA_ROOT`), `except duckdb.Error → _format_sql_error(exc, "--context")`, `except Exception → "**Error:** …"`.
+  - [x] **`handle_query` (UPDATE):** добавлен `if cleaned == "--context": return _handle_context()` в роутинг (по `cleaned`, ПЕРЕД fall-through `execute_query`). Точное равенство. `_handle_context` **приватна** — `__all__` НЕ расширён; тестируется через `core.handle_query("--context", …)`.
+- [x] **Task 2 — Обогащение `_handle_schema` семантикой каталога (`core.py` UPDATE; AC #2/#7/#8)**
+  - [x] **Аддитивно** дополнен `_handle_schema` колонкой `semantics`: загрузка каталога (ValueError → AC #7 строкой); `desc = catalog.descriptions(table_name)` если `table_name in VALID_SOURCES`, иначе `{}`; `_build_semantics_case(desc)` → `CASE WHEN column_name='{col}' THEN '{escaped_desc}' … ELSE NULL END` (экранирование `'`→`''`; пустое/нет ключа → ветку пропустить → ELSE NULL = AC #8); итог `SELECT column_name, data_type, {semantics_expr} AS semantics FROM information_schema.columns WHERE table_schema = 'main' AND table_name='{name}' ORDER BY ordinal_position` → `execute_query(...)`. ⚠️ Фильтр `table_schema = 'main'` СОХРАНЁН. **НЕ** `_annotate_money_column`/`_COST_COLUMN_SEMANTICS`/regex.
+  - [x] Существование таблицы (AC #4 3.2) + квотирование имени — **переиспользованы из 3.2** (`_validate_table_name`/`_check_table_exists` в `handle_query` до `_handle_schema`), не дублированы.
+- [x] **Task 3 — Снятие directaiq-специфики = ASSERT + сервер docstring/Field (`gdau_mcp_server.py` UPDATE; AC #3/#4/#5/#6)**
+  - [x] **Ничего не удалять** (риск №1): `_COST_COLUMN_SEMANTICS`/`_annotate_money_column`/`_GENERIC_MONEY_COL_RE`/`process_sql_placeholders`/`get_config`/`config_manager`/`common.py` в репо отсутствуют. Отсутствие закреплено тестами (Task 5: ast-import + ast-code-identifier guard).
+  - [x] **`Field`/docstring инструмента (UPDATE):** добавлены в рекламу `--context` (авто-обзор: объекты/типы/row counts/диапазоны дат + семантика колонок из каталога) и упоминание `semantics` в `--schema TABLE`. **НЕ** упоминаются Direct/НДС/goal-плейсхолдеры/`{{…}}`.
+  - [x] **НЕ** менялся `readOnlyHint` (остался `False`) и **НЕ** тронут `_save_audit_log` (3.2). 3.3 — только дополнение docstring/`Field` + шапки.
+- [x] **Task 4 — Спека `docs/mcp-query.md` (UPDATE; часть DoD)**
+  - [x] Дополнена (3 вопроса project-context): **что делает** — `--context` (обзор рабочего слоя) + семантика колонок «что означает поле» из каталога в `--context`/`--schema TABLE`; **зачем** — ориентироваться без ручных подсказок, без Direct/НДС-специфики; **контракт** — семантика согласована с каталогом-SSOT, каталог битый → понятная ошибка, лок писателя не берётся. Из «Границы» снят пункт про 3.3 (Epic 3 закрыт).
+- [x] **Task 5 — Тесты (`tests/test_mcp_core.py` + `tests/test_gdau_mcp_server.py` UPDATE)**
+  - [x] Фикстуры: `context_db` (view'ы `visits`/`hits` через `create_views` поверх tmp-партиций + `load_state` через `ensure_load_state_table`/`mark_loaded` + подмена `core.load_catalog` мини-каталогом `_catalog()`) и `empty_context_db` (пустые view'ы без партиций — AC #9). Каталог для AC #7/#8 — подмена `core.load_catalog` (детерминизм, риск №7).
+  - [x] **AC #1:** `test_context_lists_objects_with_counts_and_dates` — секции `visits`/`hits`/`load_state` по вхождению, колонки с типами, `row_count`, диапазон дат строкой (CAST AS VARCHAR, не repr date). + `test_context_returns_markdown_ignoring_format` (риск №6).
+  - [x] **AC #2:** `test_context_includes_catalog_semantics` + `test_schema_single_table_columns_with_semantics` (`--schema visits` несёт `semantics`, `visit_id` == описание каталога) + `test_core_uses_catalog_for_semantics`.
+  - [x] **AC #2 (КРИТ — обновлён сломанный тест 3.2):** `test_schema_single_table_columns_without_semantics` → `test_schema_single_table_columns_with_semantics` (ждёт `["column_name","data_type","semantics"]`, проверяет семантику `visit_id`). Единственный правомерно изменённый тест 3.2.
+  - [x] **AC #3/#4/#6 (guard отсутствия):** `test_no_directaiq_money_goal_code_symbols_in_core` (ast-code-identifier, НЕ подстрока — шапка упоминает символы словами); существующий ast-import `test_no_directaiq_infra_imported_in_mcp_package` (config_manager/auth_manager/directaiq/common); сервер импортируется/регистрирует `duckdb_query` без `config_manager` (весь набор импортирует `core`/`server` без `ImportError`).
+  - [x] **AC #5 (регресс):** `test_interface_intact_with_context` (SQL 3.1 + `--tables`/`--sample` 3.2 + `--context` 3.3 рядом); `test_tool_docstring_advertises_context_and_semantics`; весь набор 3.1/3.2 зелёный.
+  - [x] **AC #7:** `test_context_broken_catalog_friendly_error` + `test_schema_broken_catalog_friendly_error` (битый каталог → «Каталог схемы недоступен» строкой, сервер жив, НЕ полу-контекст/`**SQL Error`).
+  - [x] **AC #8:** `test_context_load_state_columns_unknown_semantics` (load_state-колонки → «—», без KeyError) + `test_schema_load_state_semantics_all_null` + `test_context_drift_column_warns` (колонка-источника без каталога → «—» + WARNING).
+  - [x] **AC #9:** `test_context_empty_views_zero_rows_null_range` (пустые view → `0 строк`, диапазон дат отсутствует, без падения).
+  - [x] **Риск №6 (до данных):** `test_context_before_data_friendly_hint` (`--context` без `gdau.duckdb` → подсказка `gdau-logs update`, не сырой `RuntimeError`).
+  - [x] **`tests/test_catalog.py`** (UPDATE): `Catalog.descriptions(source)` → `{storage_name: description}`; невалидный `source` → `ValueError`; пустое `description` сохраняется. Существующую валидацию не трогали.
+  - [x] Существующие тесты 3.1/3.2 — зелёные; **единственное правомерное изменение** — переименование сломанного теста схемы (смена контракта).
+- [x] **Гейты перед сдачей**
+  - [x] `uv run mypy scripts` → зелено (win32 + `--platform linux`, 24 файла; `fetchone()` под guard `None`; без `Any`-дыр).
+  - [x] `uv run pytest` (offline) → зелено: **446 passed, 4 skipped** (capability-gated симлинки 4.1), 8 live deselected. Маркер `live` не вводился.
+  - [x] `uv.lock`/`pyproject.toml` не менялись (`mcp`/`duckdb`/`pydantic`/`python-dotenv` уже есть; `re`/`json`/`ast` — stdlib; каталог — наш `catalog.py`).
+  - [x] Чек-лист «Definition of Done» пройден; `docs/mcp-query.md` обновлён.
 
 ## Dev Notes
 
@@ -207,11 +207,43 @@ directaiq `_handle_context` **пропускал `COUNT(*)` для VIEW** (`NULL
 
 ### Agent Model Used
 
+claude-opus-4-7[1m] (Claude Opus 4.7, 1M context) — dev-story workflow.
+
 ### Debug Log References
+
+- `uv run mypy scripts` → `Success: no issues found in 24 source files` (win32).
+- `uv run mypy scripts --platform linux` → `Success: no issues found in 24 source files`.
+- `uv run pytest -q` → `446 passed, 4 skipped, 8 deselected`.
+- Целевой прогон `tests/test_mcp_core.py tests/test_gdau_mcp_server.py tests/test_catalog.py` → `118 passed`.
 
 ### Completion Notes List
 
+- **Центральный тезис риска №1 подтверждён эмпирически:** directaiq-специфика (`config_manager`/`_COST_COLUMN_SEMANTICS`/`_annotate_money_column`/`_GENERIC_MONEY_COL_RE`/`process_sql_placeholders`/`get_config`/goal-плейсхолдеры) в `scripts/mcp/**` ОТСУТСТВУЕТ — никогда не вендорилась (вариант A 3.1 + скоуп 3.2). ACs #3/#4/#6 закрыты **guard-тестами отсутствия**, не удалением. «Замена `_COST_COLUMN_SEMANTICS`» = семантика из НАШЕГО каталога.
+- **Task 0:** 3.2 влита в `main` (PR #17, commit 6bc45fc); ветка 3.3 от обновлённого main — сервисный слой 3.2 (`handle_query`-роутинг, `_handle_schema` plain, `_validate_table_name`/`_check_table_exists`, `readOnlyHint=False`, `_save_audit_log`) на диске. Прескрипции истории сверены с фактическим кодом.
+- **`Catalog.descriptions(source) -> dict[str, str]`** (catalog.py, аддитивный аксессор, зеркало `duckdb_types`) — единственный источник семантики (SSOT, не дублируем в `core.py`). Валидирует source через `fields_for` (fail-loud).
+- **`_handle_context`** (core.py, новое): своя read-only conn, объекты/колонки/типы из `information_schema` (`table_schema='main'`), per-object `COUNT(*)` (и для view'ов — отличие от directaiq, наши view тонкие, COUNT дёшев) + MIN/MAX по первой date-подобной колонке (`_first_date_like_column`, CAST AS VARCHAR — иначе repr Python-`date`). Семантика — `catalog.descriptions` для источников через `dict.get` (AC #8 без KeyError); markdown БЕЗ секций Money/Goal/Config. Per-object SELECT'ы вместо directaiq-UNION ALL (объектов мало — читаемее). Все ошибки → строка (зовётся напрямую из `handle_query`, риск №6): RuntimeError/ValueError(каталог+корень)/duckdb.Error/Exception.
+- **`_handle_schema`** обогащён колонкой `semantics` (`_build_semantics_case` — механика CASE из directaiq, источник — `description` каталога; экранирование `'`→`''`; пустое/нет ключа → ELSE NULL = AC #8). Фильтр `table_schema='main'` СОХРАНЁН (критично — иначе одноимённый объект в `temp`/`pg_catalog` задвоил бы строки). Каталог-ошибка → строка (AC #7).
+- **Сервер:** `Field`/docstring/шапка рекламируют `--context` + `semantics`, без Direct/НДС/goal. `readOnlyHint=False`/`_save_audit_log` 3.2 НЕ тронуты.
+- **Read-only инвариант сохранён:** `_handle_context`/`_handle_schema` — `read_only=True`, `.writer.lock` не берётся, `gdau.duckdb` не мутируется, `--context` файлов не пишет. `paths.py`/`execute_query`/guard/clamp/timeout/retry 3.1/авто-экспорт/`_export_query` 3.2 не трогались.
+- **Live неприменим** (как 3.1/3.2/2.1/2.6): `--context`/`--schema` читают локальный `gdau.duckdb` + каталог CSV, во внешний Logs API не ходят. Достаточно offline. Ручной smoke против `G:\gdau-smoke` описан в `docs/mcp-query.md` (опционально).
+- **Guard-тесты по AST, не подстроке:** шапка модуля намеренно упоминает directaiq-символы словами («НЕ переносятся») → проверка по подстроке дала бы ложный красный. `test_no_directaiq_money_goal_code_symbols_in_core` смотрит реальные code-идентификаторы (Name/FunctionDef/Attribute), игнорируя docstring'и/комментарии.
+
 ### File List
+
+- `scripts/utils/catalog.py` (UPDATE) — `Catalog.descriptions(source)` (аддитивный аксессор).
+- `scripts/mcp/tools/core.py` (UPDATE) — импорт каталога; `_handle_context`/`_first_date_like_column` (новое); `_build_semantics_case` (новое) + обогащение `_handle_schema` семантикой; роутинг `--context` в `handle_query`; обновлена шапка-пометка вендоринга.
+- `scripts/mcp/gdau_mcp_server.py` (UPDATE) — `Field`/docstring/шапка: `--context` + `semantics`, без Direct/НДС/goal.
+- `docs/mcp-query.md` (UPDATE) — `--context` + семантика каталога; «Границы» (Epic 3 закрыт); ручной smoke.
+- `tests/test_catalog.py` (UPDATE) — 3 теста `Catalog.descriptions`.
+- `tests/test_mcp_core.py` (UPDATE) — фикстуры `context_db`/`empty_context_db`; тесты AC #1–#9 + guard отсутствия + интерфейс; переименован сломанный тест схемы (смена контракта).
+- `tests/test_gdau_mcp_server.py` (UPDATE) — тест рекламы `--context`/`semantics` в docstring без Direct-специфики.
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (UPDATE) — статус 3-3 → in-progress → review.
+
+### Change Log
+
+| Дата | Изменение |
+|---|---|
+| 2026-05-26 | Реализована история 3.3 (ФИНАЛ Epic 3, FR-18): `--context` (авто-обзор рабочего слоя) + семантика колонок из каталога в `--context`/`--schema TABLE`. Снятие directaiq-специфики = guard-тесты отсутствия (риск №1). Все 9 AC закрыты. Гейты зелёные (mypy strict win32+linux 24 файла, pytest 446 passed / 4 skipped / 8 live deselected). Статус → review. |
 
 ## Definition of Done
 
@@ -225,3 +257,19 @@ directaiq `_handle_context` **пропускал `COUNT(*)` для VIEW** (`NULL
 8. Тесты (UPDATE 3.1/3.2 + новые): `--context` (объекты/типы/row counts/даты/семантика) / `--schema TABLE` с `semantics` из каталога / guard отсутствия Direct-НДС-goal-config_manager (строковый + ast) / сервер без `config_manager` / каталог-битый → ошибка / рассинхрон → unknown+WARNING / пустые view → 0/null / регресс 3.1/3.2. (AC #1–#9)
 9. Гейты зелёные: `mypy scripts` (`strict=true`; CI ubuntu+windows, локально доп. `--platform linux`), `pytest` (offline); `uv.lock`/`pyproject.toml` не менялись. Live неприменим (MCP-контекст в Logs API не ходит).
 10. **Зависимость порядка учтена (риск №2):** 3.1 **и** 3.2 реализованы/влиты ДО старта 3.3 (3.3 расширяет роутинг 3.2 и `_handle_schema` 3.2); ветка 3.3 от обновлённого `main`; меняемые места не сломали тесты 3.1/3.2.
+
+## Review Findings
+
+_Code-review 2026-05-26 (3 слоя Opus: Blind Hunter / Edge Case Hunter / Acceptance Auditor). Acceptance Auditor: 9/9 AC PASS, 0 FAIL, 0 PARTIAL. Триаж: 1 decision-needed (→ ратифицирован), 1 patch, 0 defer, 7 dismissed._
+
+- [x] [Review][Decision] `--context` обходит watchdog-таймаут и retry на `IOException` из `execute_query` — `_handle_context` зовёт `conn.execute(...).fetchall()`/`.fetchone()` напрямую (`scripts/mcp/tools/core.py`, секции COUNT/MIN-MAX), без `_execute_with_timeout` (риск №2/AC #11 3.1) и без однократного retry на `duckdb.IOException` (риск №4/AC #9 3.1: оркестратор подменяет партицию `os.replace` во время чтения parquet-glob). **РЕШЕНИЕ ШЕФА (2026-05-26): ратифицировать простой дизайн** — server-controlled дешёвые SELECT'ы (COUNT/MIN-MAX по метаданным parquet тонких view'ов), модель «один оператор», спека 3.3 (риск №5/№6) сознательно выбрала простоту, Acceptance Auditor засчитал as-is. Принцип проекта «усложнять только по реальной потребности» → `_handle_context` НЕ меняем. Dismissed.
+- [x] [Review][Patch] Семантика колонок в markdown `--context` не экранируется (перевод строки в `description` каталога разорвёт пункт списка) — `_handle_context` отдаёт `f"- {col_name}: {col_type} — {sem}"` без `_md_escape`, тогда как путь `--schema` экранирует через `format_result_markdown`→`_md_escape`. Низкая severity (каталог доверенный, описания сейчас однострочные), но асимметрия и `_md_escape` уже есть в файле. [scripts/mcp/tools/core.py:804] **ПРИМЕНЁН (2026-05-26):** `safe_sem = sem.replace("\r", " ").replace("\n", " ")` перед сборкой пункта (CR/LF→пробел; `|` в пункте списка не экранируем — иначе лишний `\`). +регресс-тест `test_context_multiline_semantics_stays_on_one_line`. Гейты: pytest 447 passed (+1) / 4 skipped / 8 deselected, mypy strict 24 файла.
+
+### Dismissed (с обоснованием)
+- WARNING на пустое `description` в `--context` (Blind) — соответствует AC #8 («пустое description → unknown + WARNING»), сообщение явно содержит «(пустое/отсутствующее description)».
+- Жёсткое «строк» без склонения (Blind) — косметика, без функционального эффекта; форма count-agnostic.
+- `TIMESTAMP`-колонка через `CAST AS VARCHAR` даст время в диапазоне (Blind) — для `visits`/`hits`/`load_state` первая date-подобная колонка `date` (DATE) по ordinal; триггера на текущей схеме нет; даже при срабатывании — валидная строка, без падения.
+- `--context arg` уходит в SQL с невнятной ошибкой (Blind) — AC #1 требует точного `cleaned == "--context"`; `--context` аргументов не принимает; редкое мисьюз, не падение.
+- `int(count_row[0])` защитный (Blind) — `COUNT(*)` всегда возвращает непустое; реального пути отказа нет.
+- Каталог→view дрейф (поле каталога без колонки view) не предупреждается (Edge) — AC #8 про несопоставленную КОЛОНКУ вывода (view→каталог); orphan-поле каталога — безвредный no-op, вне текста AC #8.
+- Вводящее в заблуждение «Каталог схемы недоступен» при незаданном `GDAU_DATA_ROOT` (Edge) — сознательное решение (комментарий в коде: один класс `ValueError` для каталога и корня); `{exc}` приклеивает реальную причину; путь только при мисконфигурации, сервер жив.

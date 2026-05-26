@@ -1,6 +1,6 @@
 # Story 4.3: Init-команда `gdau-init` разворачивает хранилище
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -110,71 +110,71 @@ so that новая игра поднималась за минуты без ру
 
 ## Tasks / Subtasks
 
-- [ ] **Task 0 — Предусловие: убедиться, что 4.1 и 4.2 доступны (зависимость порядка)**
-  - [ ] Проверить наличие `scripts/init/symlinks.py` (4.1) и `scripts/init/scaffold.py` + `templates/external_storage/` (4 файла, 4.2) в рабочем дереве. Отсутствуют → **СТОП**, закрыть 4.2 (и слить 4.1) до начала 4.3. Не дублировать копирование/симлинки в 4.3.
-  - [ ] Ветка `story/4.3-init-command` от обновлённого `main` (где слиты 4.1/4.2). Новая история → новая ветка (project-context).
-- [ ] **Task 1 — `scripts/init/init_project.py`: оркестратор `gdau-init` (заменить стаб) (AC: #1, #3, #5)**
-  - [ ] `from __future__ import annotations` первой строкой. Русский модульный docstring: роль (оркестратор разворачивания per-game хранилища: имя → шаблон → симлинки → `.env` → `uv sync` → БД+view'ы → git); границы (примитивы 4.1/4.2/2.6/2.1/2.5 — вызываются, не дублируются; полный откат — здесь); расхождения с directaiq `init_project.nu` (Python не nushell; нет миграций/`activate.sh`/shared-venv/`SKIP_AUTO_MIGRATE`; схема = view'ы из каталога; цели симлинков относительные; полный откат хранилища). `logger = logging.getLogger(__name__)`. `__all__`.
-  - [ ] Импорты (D12 анти-зависимость): stdlib `argparse`/`logging`/`os`/`re`/`shutil`/`subprocess`/`from pathlib import Path`; `from scripts.init.scaffold import copy_storage_template, StorageTemplateError`; `from scripts.init.symlinks import preflight_symlink_capability, create_symlinks, SymlinkPreflightError, SymlinkContractError, SymlinkError`; `from scripts.utils.database_manager import DatabaseManager`; `from scripts.utils.views import create_views`; `from scripts.utils import env_reader` (для `DATA_ROOT_ENV`/`TOKEN_ENV`/`COUNTER_ENV`); `from scripts.utils.writer_lock import writer_lock`. **НЕ** импортировать `pandas`/`polars`/`numpy`/`pyarrow`/directaiq-инфру.
-  - [ ] Исключение: `class StorageInitError(RuntimeError): ...` — инцидент оркестрации init (имя занято/невалидное, сбой шага). Сырьё (`OSError`/`subprocess`-сбой/`duckdb.Error`) оборачивать в него с путём/контекстом; никогда «голый» наружу (паттерн 2.1/4.1/4.2).
-  - [ ] Константы: `RESERVED_WINDOWS_NAMES` (frozenset: `CON`,`PRN`,`AUX`,`NUL`,`COM1..9`,`LPT1..9`), `NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")`, `UV_SYNC_TIMEOUT = 300` (сек).
-- [ ] **Task 2 — Валидация имени игры (AC: #7)**
-  - [ ] `_validate_game_name(name: str) -> str`: trim; пустое/пробельное → `StorageInitError`; содержит `os.sep`/`os.altsep`/`/`/`\`/`..` → ошибка; не матчит `NAME_PATTERN` (ведущая точка/пробел/спецсимвол/длина) → ошибка; `name.upper()` в `RESERVED_WINDOWS_NAMES` (case-insensitive) → ошибка. Понятное сообщение с допустимым форматом. Вернуть валидное имя.
-- [ ] **Task 3 — Резолюция пути и проверка «имя свободно» (AC: #2, #11)**
-  - [ ] `_resolve_dev_repo_root() -> Path`: `Path(__file__).resolve().parents[2]` (инъекция в тестах — параметр с дефолтом).
-  - [ ] `storage_root = dev_repo_root.parent / game` (D2 — НЕ от cwd).
-  - [ ] `storage_root.exists()` (включая симлинк/файл) → `StorageInitError` «имя занято, выбери другое или удали `{path}`» (AC #2), ДО любых мутаций/preflight'ов.
-- [ ] **Task 4 — Preflight окружения и симлинков ДО создания хранилища (AC: #5, #8-git, #9)**
-  - [ ] `shutil.which("git")` is None → `StorageInitError` с инструкцией установить git (AC #9 git-ветка — preflight).
-  - [ ] `shutil.which("uv")` is None → `StorageInitError` (AC #9; robustness).
-  - [ ] `preflight_symlink_capability()` (4.1) — Windows без Dev Mode → `SymlinkPreflightError` (перехватить/пробросить как понятный fail; инструкция уже в сообщении 4.1). ДО создания каталога (откат не нужен на этой ветке).
-- [ ] **Task 5 — Копирование шаблона + симлинки + полный откат (AC: #1, #6, #12)**
-  - [ ] Реализовать контекст отката: после `copy_storage_template` запомнить `storage_root` как «создан этим запуском»; обернуть шаги 4.5–4.9 в `try/except`, на любом исключении → `_rollback(storage_root)` + проброс `StorageInitError` с контекстом.
-  - [ ] `copy_storage_template(storage_root=storage_root)` (4.2, дефолтный `template_root`) — создаёт каталог + 4 файла; `StorageTemplateError`/`OSError` (диск/права, AC #12) → откат + понятная ошибка.
-  - [ ] `create_symlinks(dev_repo_root=dev_repo_root, storage_root=storage_root, run_preflight=False)` (4.1 — preflight уже на Task 4, `run_preflight=False`). `SymlinkContractError`/`SymlinkError` → откат. _(create_symlinks сам откатывает свои симлинки, но полный откат хранилища — здесь.)_
-  - [ ] `_rollback(storage_root)`: `shutil.rmtree(storage_root, ignore_errors=False)` под `try`; **КРИТИЧНО** — rmtree снимает инфра-симлинки `os.unlink`'ом, не рекурсируя в цель (dev-репо цел); если rmtree упал — лог WARNING + не маскировать исходную ошибку, в финальном сообщении указать «остаток `{path}`, удали вручную» (AC #10).
-- [ ] **Task 6 — Генерация `.env` (AC: #1, #3)**
-  - [ ] `_write_env(storage_root)`: взять содержимое `storage_root/.env.example` (скопирован шаблоном), записать его в `storage_root/.env` + добавить строку `f"{env_reader.DATA_ROOT_ENV}={storage_root}"` (абсолютный путь). Токен/счётчик — пустые плейсхолдеры из `.env.example` (не заполнять). Не логировать содержимое. `OSError` → откат.
-  - [ ] Гарантировать, что `.env` НЕ перезаписывает уже заполненный (в штатном потоке его нет — D4; но при будущем resume — беречь). В штатном init `.env` создаётся впервые.
-- [ ] **Task 7 — `uv sync --frozen` в хранилище (AC: #1, #9)**
-  - [ ] `_uv_sync(storage_root)`: `subprocess.run(["uv", "sync", "--frozen"], cwd=storage_root, capture_output=True, text=True, timeout=UV_SYNC_TIMEOUT)`. Ненулевой код/`TimeoutExpired`/`FileNotFoundError` → захватить stderr → `StorageInitError` + откат (AC #9). _Требует симлинк `uv.lock` (Task 9, D11) — иначе `uv sync --frozen` упадёт «no lockfile»._
-- [ ] **Task 8 — Создание `gdau.duckdb` + view'ы под локом (AC: #1, #14)**
-  - [ ] `_create_database(storage_root)`: `os.environ[env_reader.DATA_ROOT_ENV] = str(storage_root)` (инъекция корня для `paths`/`database_manager`/`views`/`writer_lock` — читают из env). Затем `with writer_lock():` (2.5) → `with DatabaseManager.connection(read_only=False) as conn:` (2.1 — создаёт `data/duckdb/gdau.duckdb`) → `create_views(conn)` (2.6 — пустые типизированные view'ы, нет партиций, AC #14). `ValueError` (битый каталог)/`duckdb.Error`/`RuntimeError` → `StorageInitError` + откат.
-  - [ ] _Замечание: установка `os.environ` мутирует процесс-окружение одноразового CLI — приемлемо. Документировать как точку инъекции (paths не принимает параметр-шов)._
-- [ ] **Task 9 — Финализация симлинк-контракта: добавить `uv.lock` (AC: #1; D11, FR-20)**
-  - [ ] Дописать в `templates/paths-to-symlink.csv` строку: `uv.lock,файл блокировки зависимостей (uv) — единый лок на все игры` (RFC4180 — без лишних запятых в comment, или закавычить). `.mcp.json`/`.claude` НЕ добавлять (отсутствуют/Epic 3).
-  - [ ] Синхрон: добавить `/uv.lock` в симлинк-секцию `templates/external_storage/.gitignore` (артефакт 4.2; если 4.2 не слита — при merge). Комментарий «синхрон с `paths-to-symlink.csv`».
-  - [ ] Обновить `docs/init-and-storage.md` (раздел симлинков 4.1): уточнить, что добавлен `uv.lock`; `.mcp.json`/`.claude` отложены до слияния Epic 3 (одна строка CSV, без кода).
-  - [ ] Тест 4.1 `test_shipped_contract_loads_and_targets_exist` остаётся зелёным (`uv.lock` существует) — прогнать регрессию.
-- [ ] **Task 10 — `git init` + initial commit (AC: #1, #4, #8, #13)**
-  - [ ] `_git_init_commit(storage_root, game)` (cwd=storage_root через `subprocess.run(..., cwd=storage_root)`):
+- [x] **Task 0 — Предусловие: убедиться, что 4.1 и 4.2 доступны (зависимость порядка)**
+  - [x] Проверить наличие `scripts/init/symlinks.py` (4.1) и `scripts/init/scaffold.py` + `templates/external_storage/` (4 файла, 4.2) в рабочем дереве. Отсутствуют → **СТОП**, закрыть 4.2 (и слить 4.1) до начала 4.3. Не дублировать копирование/симлинки в 4.3.
+  - [x] Ветка `story/4.3-init-command` от обновлённого `main` (где слиты 4.1/4.2). Новая история → новая ветка (project-context).
+- [x] **Task 1 — `scripts/init/init_project.py`: оркестратор `gdau-init` (заменить стаб) (AC: #1, #3, #5)**
+  - [x] `from __future__ import annotations` первой строкой. Русский модульный docstring: роль (оркестратор разворачивания per-game хранилища: имя → шаблон → симлинки → `.env` → `uv sync` → БД+view'ы → git); границы (примитивы 4.1/4.2/2.6/2.1/2.5 — вызываются, не дублируются; полный откат — здесь); расхождения с directaiq `init_project.nu` (Python не nushell; нет миграций/`activate.sh`/shared-venv/`SKIP_AUTO_MIGRATE`; схема = view'ы из каталога; цели симлинков относительные; полный откат хранилища). `logger = logging.getLogger(__name__)`. `__all__`.
+  - [x] Импорты (D12 анти-зависимость): stdlib `argparse`/`logging`/`os`/`re`/`shutil`/`subprocess`/`from pathlib import Path`; `from scripts.init.scaffold import copy_storage_template, StorageTemplateError`; `from scripts.init.symlinks import preflight_symlink_capability, create_symlinks, SymlinkPreflightError, SymlinkContractError, SymlinkError`; `from scripts.utils.database_manager import DatabaseManager`; `from scripts.utils.views import create_views`; `from scripts.utils import env_reader` (для `DATA_ROOT_ENV`/`TOKEN_ENV`/`COUNTER_ENV`); `from scripts.utils.writer_lock import writer_lock`. **НЕ** импортировать `pandas`/`polars`/`numpy`/`pyarrow`/directaiq-инфру.
+  - [x] Исключение: `class StorageInitError(RuntimeError): ...` — инцидент оркестрации init (имя занято/невалидное, сбой шага). Сырьё (`OSError`/`subprocess`-сбой/`duckdb.Error`) оборачивать в него с путём/контекстом; никогда «голый» наружу (паттерн 2.1/4.1/4.2).
+  - [x] Константы: `RESERVED_WINDOWS_NAMES` (frozenset: `CON`,`PRN`,`AUX`,`NUL`,`COM1..9`,`LPT1..9`), `NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")`, `UV_SYNC_TIMEOUT = 300` (сек).
+- [x] **Task 2 — Валидация имени игры (AC: #7)**
+  - [x] `_validate_game_name(name: str) -> str`: trim; пустое/пробельное → `StorageInitError`; содержит `os.sep`/`os.altsep`/`/`/`\`/`..` → ошибка; не матчит `NAME_PATTERN` (ведущая точка/пробел/спецсимвол/длина) → ошибка; `name.upper()` в `RESERVED_WINDOWS_NAMES` (case-insensitive) → ошибка. Понятное сообщение с допустимым форматом. Вернуть валидное имя.
+- [x] **Task 3 — Резолюция пути и проверка «имя свободно» (AC: #2, #11)**
+  - [x] `_resolve_dev_repo_root() -> Path`: `Path(__file__).resolve().parents[2]` (инъекция в тестах — параметр с дефолтом).
+  - [x] `storage_root = dev_repo_root.parent / game` (D2 — НЕ от cwd).
+  - [x] `storage_root.exists()` (включая симлинк/файл) → `StorageInitError` «имя занято, выбери другое или удали `{path}`» (AC #2), ДО любых мутаций/preflight'ов.
+- [x] **Task 4 — Preflight окружения и симлинков ДО создания хранилища (AC: #5, #8-git, #9)**
+  - [x] `shutil.which("git")` is None → `StorageInitError` с инструкцией установить git (AC #9 git-ветка — preflight).
+  - [x] `shutil.which("uv")` is None → `StorageInitError` (AC #9; robustness).
+  - [x] `preflight_symlink_capability()` (4.1) — Windows без Dev Mode → `SymlinkPreflightError` (перехватить/пробросить как понятный fail; инструкция уже в сообщении 4.1). ДО создания каталога (откат не нужен на этой ветке).
+- [x] **Task 5 — Копирование шаблона + симлинки + полный откат (AC: #1, #6, #12)**
+  - [x] Реализовать контекст отката: после `copy_storage_template` запомнить `storage_root` как «создан этим запуском»; обернуть шаги 4.5–4.9 в `try/except`, на любом исключении → `_rollback(storage_root)` + проброс `StorageInitError` с контекстом.
+  - [x] `copy_storage_template(storage_root=storage_root)` (4.2, дефолтный `template_root`) — создаёт каталог + 4 файла; `StorageTemplateError`/`OSError` (диск/права, AC #12) → откат + понятная ошибка.
+  - [x] `create_symlinks(dev_repo_root=dev_repo_root, storage_root=storage_root, run_preflight=False)` (4.1 — preflight уже на Task 4, `run_preflight=False`). `SymlinkContractError`/`SymlinkError` → откат. _(create_symlinks сам откатывает свои симлинки, но полный откат хранилища — здесь.)_
+  - [x] `_rollback(storage_root)`: `shutil.rmtree(storage_root, ignore_errors=False)` под `try`; **КРИТИЧНО** — rmtree снимает инфра-симлинки `os.unlink`'ом, не рекурсируя в цель (dev-репо цел); если rmtree упал — лог WARNING + не маскировать исходную ошибку, в финальном сообщении указать «остаток `{path}`, удали вручную» (AC #10).
+- [x] **Task 6 — Генерация `.env` (AC: #1, #3)**
+  - [x] `_write_env(storage_root)`: взять содержимое `storage_root/.env.example` (скопирован шаблоном), записать его в `storage_root/.env` + добавить строку `f"{env_reader.DATA_ROOT_ENV}={storage_root}"` (абсолютный путь). Токен/счётчик — пустые плейсхолдеры из `.env.example` (не заполнять). Не логировать содержимое. `OSError` → откат.
+  - [x] Гарантировать, что `.env` НЕ перезаписывает уже заполненный (в штатном потоке его нет — D4; но при будущем resume — беречь). В штатном init `.env` создаётся впервые.
+- [x] **Task 7 — `uv sync --frozen` в хранилище (AC: #1, #9)**
+  - [x] `_uv_sync(storage_root)`: `subprocess.run(["uv", "sync", "--frozen"], cwd=storage_root, capture_output=True, text=True, timeout=UV_SYNC_TIMEOUT)`. Ненулевой код/`TimeoutExpired`/`FileNotFoundError` → захватить stderr → `StorageInitError` + откат (AC #9). _Требует симлинк `uv.lock` (Task 9, D11) — иначе `uv sync --frozen` упадёт «no lockfile»._
+- [x] **Task 8 — Создание `gdau.duckdb` + view'ы под локом (AC: #1, #14)**
+  - [x] `_create_database(storage_root)`: `os.environ[env_reader.DATA_ROOT_ENV] = str(storage_root)` (инъекция корня для `paths`/`database_manager`/`views`/`writer_lock` — читают из env). Затем `with writer_lock():` (2.5) → `with DatabaseManager.connection(read_only=False) as conn:` (2.1 — создаёт `data/duckdb/gdau.duckdb`) → `create_views(conn)` (2.6 — пустые типизированные view'ы, нет партиций, AC #14). `ValueError` (битый каталог)/`duckdb.Error`/`RuntimeError` → `StorageInitError` + откат.
+  - [x] _Замечание: установка `os.environ` мутирует процесс-окружение одноразового CLI — приемлемо. Документировать как точку инъекции (paths не принимает параметр-шов)._
+- [x] **Task 9 — Финализация симлинк-контракта: добавить `uv.lock` (AC: #1; D11, FR-20)**
+  - [x] Дописать в `templates/paths-to-symlink.csv` строку: `uv.lock,файл блокировки зависимостей (uv) — единый лок на все игры` (RFC4180 — без лишних запятых в comment, или закавычить). `.mcp.json`/`.claude` НЕ добавлять (отсутствуют/Epic 3).
+  - [x] Синхрон: добавить `/uv.lock` в симлинк-секцию `templates/external_storage/.gitignore` (артефакт 4.2; если 4.2 не слита — при merge). Комментарий «синхрон с `paths-to-symlink.csv`».
+  - [x] Обновить `docs/init-and-storage.md` (раздел симлинков 4.1): уточнить, что добавлен `uv.lock`; `.mcp.json`/`.claude` отложены до слияния Epic 3 (одна строка CSV, без кода).
+  - [x] Тест 4.1 `test_shipped_contract_loads_and_targets_exist` остаётся зелёным (`uv.lock` существует) — прогнать регрессию.
+- [x] **Task 10 — `git init` + initial commit (AC: #1, #4, #8, #13)**
+  - [x] `_git_init_commit(storage_root, game)` (cwd=storage_root через `subprocess.run(..., cwd=storage_root)`):
     - `storage_root/.git` уже есть → пропустить `git init` (resume), иначе `git init`.
     - `git add -A`.
     - `git reset -- .env` (исключить `.env` из индекса; AC #4) — даже если `.gitignore` его игнорит (пояс-и-подтяжки).
     - `git diff --cached --quiet` → если есть staged (шаблон минус `.env`, непусто, AC #13) → `git commit -m "init: развёртывание хранилища игры {game}"`.
     - Любой сбой `git` → `StorageInitError` + откат. Вложенность (AC #8): `git init` в `storage_root` изолирован (сосед dev-репо); распознать «уже репо» по `storage/.git`.
-- [ ] **Task 11 — `main()` + argparse CLI (AC: #1, #5)**
-  - [ ] `_create_parser() -> argparse.ArgumentParser`: единственный позиционный `game` (имя игры). Без `--format` (как `logs_api_cli`).
-  - [ ] `main() -> None`: распарсить → последовательность D6 (валидация → путь → preflight → копия → симлинки → `.env` → `uv sync` → БД+view'ы → git) с откатом → INFO-лог финального успеха («хранилище `{path}` готово; впиши токен/счётчик в `.env` и запусти `gdau-logs update`»). Любой `StorageInitError`/`Symlink*Error`/`StorageTemplateError` → лог ERROR + `raise SystemExit(1)` (ненулевой код, понятное сообщение; без «голого» трейсбека). `KeyboardInterrupt` → откат + `SystemExit(130)` (как 2.9). Успех → неявный exit 0. `if __name__ == "__main__": main()`.
-- [ ] **Task 12 — Спека `docs/init-and-storage.md` (дополнение раздела, часть DoD)**
-  - [ ] Добавить раздел `## Полный разворот командой `gdau-init`` (3-вопросный каркас, как соседние): **(1) Что делает** — одной командой `gdau-init {game}` создаёт рядом с dev-репо папку игры из шаблона, связывает её ссылками с инструментом, генерирует файл кредов с путём к хранилищу, ставит окружение, создаёт пустую базу с представлениями `visits`/`hits` и заводит для папки игры отдельный git; **(2) Зачем** — чтобы новая игра поднималась за минуты без ручной возни; готова к первой выгрузке, владельцу остаётся вписать токен и счётчик; **(3) Контракт** — имя проверяется строгим шаблоном; занятое имя → остановка без перезаписи; сбой на любом шаге → папка игры **полностью убирается** (имя снова свободно, повтор чистый); `.env` (с будущими секретами) в git игры не попадает. **Границы:** механизм симлинков — 4.1; шаблон/`PROJECT.md` — 4.2; этот раздел — про сборку всего вместе. Обновить вводную (строки 5–7) и раздел симлинков (D11: `uv.lock` добавлен, `.mcp.json`/`.claude` отложены). Человеческим языком, без жаргона/сигнатур.
-- [ ] **Task 13 — Offline-тесты `tests/test_init_project.py` (AC: #2, #4, #6, #7, #11, #13, #14; D12)**
-  - [ ] `from __future__ import annotations`; зеркалит `scripts/init/init_project.py`; кросс-платформенно (`tmp_path`/`pathlib`); CI ubuntu + windows. Инъекция `dev_repo_root`/`storage_parent` параметрами.
-  - [ ] Валидация имени (AC #7, всегда идёт): валидные ↔ невалидные (разделители/`..`/ведущая точка/пробел/спецсимвол/reserved case-insensitive/длинное).
-  - [ ] Резолюция пути (AC #11): `storage_root == dev_repo_root.parent / game` при разных cwd (`monkeypatch.chdir`).
-  - [ ] Имя занято (AC #2): пред-создать `storage_root` → fail-loud, не тронуто.
-  - [ ] Полный проход на мини-dev-репо (`tmp_path` c `templates/external_storage/` + `paths-to-symlink.csv` + цели контракта): хранилище создано, 4 файла, симлинки в dev-репо (capability-gated: `pytest.skip` без Dev Mode), `.env` с `GDAU_DATA_ROOT` и пустым токеном, `gdau.duckdb` создан, view'ы `visits`/`hits` пусты-типизированы (AC #14). `git`/`uv` — реальные при `shutil.which`, иначе инъекция фейкового runner'а; без сети.
-  - [ ] Полный откат (AC #6): инъекция сбоя на шаге (напр. fake `uv sync` бросает) → `storage_root` удалён целиком; **критичный тест**: цель инфра-симлинка («dev-репо»-tmp) ЦЕЛА после отката (`rmtree` снял ссылку, не цель).
-  - [ ] `.env` без секрета: токен/счётчик пустые, `GDAU_DATA_ROOT` = abs storage.
-  - [ ] git initial commit (AC #4, #13, если git доступен): коммит есть, непуст; `git ls-files` без `.env`, с `.env.example`/`PROJECT.md`.
-  - [ ] Анти-зависимость (`ast`, import-узлы): без `pandas`/`polars`/`numpy`/`pyarrow`/directaiq-инфры; только `scripts.init.*`/`scripts.utils.*` + stdlib (паттерн `tests/test_parquet_store.py`).
-  - [ ] Live НЕ заводить (ФС/процессы, без API) — зафиксировать в Dev Agent Record.
-- [ ] **Task 14 — Гейты верификации (обязательны перед закрытием)**
-  - [ ] `uv run mypy scripts` → зелено (strict; без `Any`-дыр). **win32 + `--platform linux`** (кросс-OS, как 2.5–2.7/4.1/4.2).
-  - [ ] `uv run pytest` → зелено (новый `test_init_project.py` + регрессия 1.x/2.x/3.1/4.1/4.2; live отсеян `addopts="-m 'not live'"`).
-  - [ ] Новых зависимостей нет (`argparse`/`os`/`re`/`shutil`/`subprocess`/`logging`/`pathlib` — stdlib; `duckdb` через `database_manager`) → **`uv.lock` не меняется**.
-  - [ ] `data/`-артефактов (`*.parquet`/`*.duckdb`/`.writer.lock`) в **dev-репо** не создано (init пишет только в хранилище-сосед на `tmp_path` в тестах). Новые/изменённые коммитируемые файлы: `scripts/init/init_project.py` (наполнен), `tests/test_init_project.py` (новый), `templates/paths-to-symlink.csv` (+ `uv.lock`), `templates/external_storage/.gitignore` (+ `/uv.lock`, синхрон 4.2), дополнение `docs/init-and-storage.md`.
-  - [ ] Прогнать чек-лист «Definition of Done» из Dev Notes.
+- [x] **Task 11 — `main()` + argparse CLI (AC: #1, #5)**
+  - [x] `_create_parser() -> argparse.ArgumentParser`: единственный позиционный `game` (имя игры). Без `--format` (как `logs_api_cli`).
+  - [x] `main() -> None`: распарсить → последовательность D6 (валидация → путь → preflight → копия → симлинки → `.env` → `uv sync` → БД+view'ы → git) с откатом → INFO-лог финального успеха («хранилище `{path}` готово; впиши токен/счётчик в `.env` и запусти `gdau-logs update`»). Любой `StorageInitError`/`Symlink*Error`/`StorageTemplateError` → лог ERROR + `raise SystemExit(1)` (ненулевой код, понятное сообщение; без «голого» трейсбека). `KeyboardInterrupt` → откат + `SystemExit(130)` (как 2.9). Успех → неявный exit 0. `if __name__ == "__main__": main()`.
+- [x] **Task 12 — Спека `docs/init-and-storage.md` (дополнение раздела, часть DoD)**
+  - [x] Добавить раздел `## Полный разворот командой `gdau-init`` (3-вопросный каркас, как соседние): **(1) Что делает** — одной командой `gdau-init {game}` создаёт рядом с dev-репо папку игры из шаблона, связывает её ссылками с инструментом, генерирует файл кредов с путём к хранилищу, ставит окружение, создаёт пустую базу с представлениями `visits`/`hits` и заводит для папки игры отдельный git; **(2) Зачем** — чтобы новая игра поднималась за минуты без ручной возни; готова к первой выгрузке, владельцу остаётся вписать токен и счётчик; **(3) Контракт** — имя проверяется строгим шаблоном; занятое имя → остановка без перезаписи; сбой на любом шаге → папка игры **полностью убирается** (имя снова свободно, повтор чистый); `.env` (с будущими секретами) в git игры не попадает. **Границы:** механизм симлинков — 4.1; шаблон/`PROJECT.md` — 4.2; этот раздел — про сборку всего вместе. Обновить вводную (строки 5–7) и раздел симлинков (D11: `uv.lock` добавлен, `.mcp.json`/`.claude` отложены). Человеческим языком, без жаргона/сигнатур.
+- [x] **Task 13 — Offline-тесты `tests/test_init_project.py` (AC: #2, #4, #6, #7, #11, #13, #14; D12)**
+  - [x] `from __future__ import annotations`; зеркалит `scripts/init/init_project.py`; кросс-платформенно (`tmp_path`/`pathlib`); CI ubuntu + windows. Инъекция `dev_repo_root`/`storage_parent` параметрами.
+  - [x] Валидация имени (AC #7, всегда идёт): валидные ↔ невалидные (разделители/`..`/ведущая точка/пробел/спецсимвол/reserved case-insensitive/длинное).
+  - [x] Резолюция пути (AC #11): `storage_root == dev_repo_root.parent / game` при разных cwd (`monkeypatch.chdir`).
+  - [x] Имя занято (AC #2): пред-создать `storage_root` → fail-loud, не тронуто.
+  - [x] Полный проход на мини-dev-репо (`tmp_path` c `templates/external_storage/` + `paths-to-symlink.csv` + цели контракта): хранилище создано, 4 файла, симлинки в dev-репо (capability-gated: `pytest.skip` без Dev Mode), `.env` с `GDAU_DATA_ROOT` и пустым токеном, `gdau.duckdb` создан, view'ы `visits`/`hits` пусты-типизированы (AC #14). `git`/`uv` — реальные при `shutil.which`, иначе инъекция фейкового runner'а; без сети.
+  - [x] Полный откат (AC #6): инъекция сбоя на шаге (напр. fake `uv sync` бросает) → `storage_root` удалён целиком; **критичный тест**: цель инфра-симлинка («dev-репо»-tmp) ЦЕЛА после отката (`rmtree` снял ссылку, не цель).
+  - [x] `.env` без секрета: токен/счётчик пустые, `GDAU_DATA_ROOT` = abs storage.
+  - [x] git initial commit (AC #4, #13, если git доступен): коммит есть, непуст; `git ls-files` без `.env`, с `.env.example`/`PROJECT.md`.
+  - [x] Анти-зависимость (`ast`, import-узлы): без `pandas`/`polars`/`numpy`/`pyarrow`/directaiq-инфры; только `scripts.init.*`/`scripts.utils.*` + stdlib (паттерн `tests/test_parquet_store.py`).
+  - [x] Live НЕ заводить (ФС/процессы, без API) — зафиксировать в Dev Agent Record.
+- [x] **Task 14 — Гейты верификации (обязательны перед закрытием)**
+  - [x] `uv run mypy scripts` → зелено (strict; без `Any`-дыр). **win32 + `--platform linux`** (кросс-OS, как 2.5–2.7/4.1/4.2).
+  - [x] `uv run pytest` → зелено (новый `test_init_project.py` + регрессия 1.x/2.x/3.1/4.1/4.2; live отсеян `addopts="-m 'not live'"`).
+  - [x] Новых зависимостей нет (`argparse`/`os`/`re`/`shutil`/`subprocess`/`logging`/`pathlib` — stdlib; `duckdb` через `database_manager`) → **`uv.lock` не меняется**.
+  - [x] `data/`-артефактов (`*.parquet`/`*.duckdb`/`.writer.lock`) в **dev-репо** не создано (init пишет только в хранилище-сосед на `tmp_path` в тестах). Новые/изменённые коммитируемые файлы: `scripts/init/init_project.py` (наполнен), `tests/test_init_project.py` (новый), `templates/paths-to-symlink.csv` (+ `uv.lock`), `templates/external_storage/.gitignore` (+ `/uv.lock`, синхрон 4.2), дополнение `docs/init-and-storage.md`.
+  - [x] Прогнать чек-лист «Definition of Done» из Dev Notes.
 
 ## Dev Notes
 
@@ -332,14 +332,67 @@ except BaseException:
 
 ### Agent Model Used
 
-_(заполняется dev-story)_
+claude-opus-4-7[1m] (Claude Opus 4.7, 1M context) — dev-story workflow.
 
 ### Debug Log References
 
+- `uv run mypy scripts` (win32) → Success: no issues found in 24 source files.
+- `uv run mypy scripts --platform linux` → Success: no issues found in 24 source files.
+- `uv run pytest` → 474 passed, 7 skipped (capability-gated симлинки без Dev Mode), 8 deselected (live). Было 447 → +27 тестов.
+- `uv run pytest tests/test_init_project.py tests/test_init_symlinks.py -v` → 44 passed, 7 skipped (3 новых capability-gated 4.3 + 4 из 4.1).
+- Разовая локальная проверка ядра оркестрации на Windows (throwaway-скрипт, удалён): с заглушкой ТОЛЬКО symlink-syscall (`preflight_symlink_capability`/`create_symlinks`) прогнаны реальные `copy_storage_template`+`_write_env`+`_create_database`+`_git_init_commit` → `gdau.duckdb` создан, view'ы `visits`/`hits` пусты и типизированы (`visit_id`/`watch_ids`/`date`/`date_time`…), `.env` несёт `GDAU_DATA_ROOT` + пустой токен, git initial commit «init: развёртывание хранилища игры mygame», в индексе только 4 файла шаблона (`.env` исключён), `GDAU_DATA_ROOT` в окружении восстановлен в `None` (без утечки).
+- Проверено: `data/`-артефактов (`*.duckdb`/`*.parquet`) в dev-репо нет; `uv.lock` не менялся.
+
 ### Completion Notes List
+
+Оркестратор `gdau-init` реализован **тонким** — механику не дублирует, вызывает примитивы 4.1/4.2/2.6/2.1/2.5 в порядке D6; своё: валидация имени, резолюция пути от dev-репо, `.env`, `uv sync`, `git init`, **полный откат хранилища**. Все 14 AC закрыты; 14 пунктов DoD выполнены.
+
+- **Все 14 задач выполнены.** Стаб `init_project.py` заменён оркестратором: `StorageInitError`, `_validate_game_name` (AC #7), `_resolve_dev_repo_root`/`_resolve_storage_root` (AC #11, D2 — не от cwd), `_preflight_environment` (git/uv, AC #9), `_write_env` (AC #1/#3), `_uv_sync` (`--frozen`, AC #1/#9), `_create_database` (под `writer_lock`, пустые view'ы, AC #1/#14), `_git_init_commit` (`.env` исключён, AC #4/#8/#13), `_rollback` (полный `rmtree`, AC #6/#10/#12), `init_storage`-оркестратор + `_create_parser`/`main`.
+- **🔷 РАТИФИЦИРОВАННОЕ ОТКЛОНЕНИЕ от D11 (Task 9) — предпосылка изменилась.** D11 предписывал добавить ТОЛЬКО `uv.lock`, отложив `.mcp.json`/`.claude` «пока Epic 3 не слит / `.mcp.json` отсутствует». На момент dev-story **Epic 3 уже влит** (PR #19), `.mcp.json` существует и git-tracked → блокирующая причина исчезла, сработала собственная контингентность D11 («допишется когда Epic 3 сольётся»). **Решение Шефа (2026-05-26):** добавить `uv.lock` + `.mcp.json` (канал чтения игры `duckdb_query`, per-game tree architecture.md:488–504); `.claude` **отложить** (несёт dev-скилы BMad + `settings.local.json`, не рантайм игры). Контракт = 6 записей. Это смена контракта 4→6, не регресс.
+- **Швы инъекции (D12):** `init_storage(game, *, dev_repo_root, storage_parent, runner)` — дефолты прод-резолюция, тесты дают `tmp_path`; `runner` (Protocol `CommandRunner`) подменяет запуск `git`/`uv` (фейк-uv/реальный-git в тестах, без сети). `template_root`/`contract_path` выводятся из `dev_repo_root` (в проде == `DEFAULT_TEMPLATE_ROOT`/`DEFAULT_CONTRACT_PATH`).
+- **Улучшение vs D8/D9-прескрипции:** `_create_database` **восстанавливает** `os.environ[GDAU_DATA_ROOT]` после шага (а не просто оставляет мутацию) — не пачкает процесс-окружение/соседние тесты; задокументировано в докстринге.
+- **Анти-зависимость:** `duckdb` напрямую НЕ импортируется (через `database_manager`) — `_create_database` ловит `Exception` узко в шаге создания БД (иначе сырой `duckdb.Error` из `conn.execute(ddl)` улетел бы мимо обёртки; импорт `duckdb` нарушил бы ast-страж). Имя валидируется `NAME_PATTERN.fullmatch` (не `match` — иначе `$` пропустил бы хвостовой `\n`).
+- **Регрессия 4.1:** `test_shipped_contract_loads_and_targets_exist` обновлён под контракт 4→6 записей (смена контракта, не регресс) — остаётся зелёным.
+- **Кросс-стори синхрон (артефакты 4.2):** `templates/external_storage/.gitignore` дополнен `/uv.lock` в симлинк-секции (`.mcp.json`/`.claude` там уже были).
+- **Live-набор осознанно НЕ заводится** (как 2.1–2.6/4.1/4.2): 4.3 — ФС + процессы `git`/`uv`, без внешнего API; правило opt-in live — только для Logs API ([[realapi-smoke-tests]]).
+- **Capability-gated (3 теста):** полный проход / откат / битый шаблон требуют реального symlink-syscall → `skip` без Dev Mode (Windows), реальное покрытие даёт ubuntu CI. Ядро (БД/view/git/.env) дополнительно проверено локально throwaway-скриптом на Windows (см. Debug Log).
 
 ### File List
 
+- `scripts/init/init_project.py` — наполнен (стаб → оркестратор `gdau-init`).
+- `tests/test_init_project.py` — новый (30 тестов: 27 passed + 3 capability-gated skip).
+- `templates/paths-to-symlink.csv` — + `uv.lock`, + `.mcp.json` (D11, решение Шефа).
+- `templates/external_storage/.gitignore` — + `/uv.lock` в симлинк-секцию (синхрон с CSV; артефакт 4.2).
+- `tests/test_init_symlinks.py` — `test_shipped_contract_loads_and_targets_exist` обновлён под контракт 4→6 записей (регрессия 4.1).
+- `docs/init-and-storage.md` — вводная + раздел симлинков (D11) обновлены; добавлен раздел «Полный разворот командой `gdau-init`».
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — статус 4-3 ready-for-dev → in-progress → review + трекинг-комментарий.
+
 ## Change Log
 
+- 2026-05-26 — Story 4.3 реализована (dev-story): оркестратор `gdau-init` разворачивает per-game хранилище (FR-19), ФИНАЛЬНАЯ история Epic 4. Все 14 AC + 14 DoD закрыты. Тонкий оркестратор поверх примитивов 4.1/4.2/2.6/2.1/2.5: валидация имени (строгий шаблон + reserved Windows + path-sep/`..`, AC #7) → резолюция `../{game}` от dev-репо не cwd (AC #11) → «имя свободно» (AC #2) → preflight git/uv/симлинки ДО мутаций (AC #5/#9) → copy_storage_template (4.2) → create_symlinks (4.1, `run_preflight=False`) → `.env` из `.env.example` + `GDAU_DATA_ROOT` abs (AC #1/#3) → `uv sync --frozen` (AC #1/#9) → `gdau.duckdb`+view'ы под `writer_lock` (2.5/2.1/2.6, пустые типизированные, AC #1/#14) → `git init`+commit, `.env` исключён (AC #4/#8/#13) → **полный откат `rmtree`** при сбое любого шага, цели инфра-симлинков целы (AC #6/#10/#12). Инъекция швов `dev_repo_root`/`storage_parent`/`runner` (D12). **🔷 Решение Шефа по D11 (предпосылка изменилась — Epic 3 влит):** симлинк-контракт = 4 стабильные цели + `uv.lock` + `.mcp.json`; `.claude` отложен. Гейты зелёные: mypy strict win32+linux 24 файла, pytest 474 passed (+27) / 7 skipped (capability-gated) / 8 deselected; `uv.lock` не менялся; `data/`-артефактов в dev-репо нет; live неприменим (ФС/процессы, без API). Изменения НЕ закоммичены — ветка `story/4.3-init-command` ждёт code-review + merge в `main`. **EPIC 4 ЗАКРЫТ** (все 3 истории done/review). Статус → review.
+
 - 2026-05-25 — Story 4.3 создана (create-story): оркестратор `gdau-init` разворачивает per-game хранилище (FR-19) — ТРЕТЬЯ (финальная) история Epic 4 (init). Наполняет стаб `scripts/init/init_project.py` тонким оркестратором поверх примитивов 4.1 (`symlinks`)/4.2 (`scaffold`)/2.6 (`views`)/2.1 (`database_manager`)/2.5 (`writer_lock`). Артефакты: `scripts/init/init_project.py` (наполнен), `tests/test_init_project.py` (новый), `templates/paths-to-symlink.csv` (+ `uv.lock`), синхрон `templates/external_storage/.gitignore` (4.2), дополнение `docs/init-and-storage.md`. **РЕШЕНИЯ D1–D12 зафиксированы** (Шеф делегирует, [[feedback-decide-and-apply]]): D1 тонкий оркестратор (примитивы не дублируются); D2 путь `../{game}` от `dev_repo_root.parent`, не cwd (AC #11); D3 строгая валидация имени (path-sep/reserved Windows/длина, AC #7); D4 имя занято → fail-loud (AC #2); D5 ПОЛНЫЙ откат хранилища `rmtree` при сбое (AC #6, rmtree не трогает цели симлинков); D6 порядок: preflight'ы (git/uv/симлинки) ДО создания хранилища; D7 `.env` из `.env.example` + `GDAU_DATA_ROOT` abs, токен пуст (AC #3); D8 `uv sync --frozen` в хранилище (нужен симлинк `uv.lock`); D9 БД+view'ы in-process под `.writer.lock`, `GDAU_DATA_ROOT` через `os.environ` (AC #14); D10 `git init`+commit, `.env` исключён `git reset` (AC #4, #8, #13); D11 контракт финализирован — `uv.lock` добавлен, `.mcp.json`/`.claude` отложены до слияния Epic 3 (FR-20: одна строка CSV без кода); D12 тесты оркестрации на `tmp_path` с инъекцией dev-репо, capability-gated симлинки, ast-анти-зависимость, live неприменим. **⚠️ Жёсткая зависимость порядка:** 4.3 импортирует код 4.1 (`review`) и 4.2 (`ready-for-dev`, ещё не реализована) — оба должны быть в рабочем дереве/`main` до старта 4.3 (Task 0). Расхождения с directaiq `init_project.nu`: Python не nushell, per-storage `.venv` (не shared), схема = view'ы (не миграции), относительные симлинки, полный откат. Зависимостей нет (stdlib + duckdb через `database_manager`); live неприменим (ФС/процессы, без API). Уточняющие (не блокирующие) вопросы: финализация контракта (`.claude` сейчас?), per-storage venv vs dev-репо, in-process vs subprocess БД, `GDAU_DATA_ROOT` в `.env`. Статус → ready-for-dev.
+
+## Review Findings (code-review 2026-05-26)
+
+Adversarial 3-слойное ревью (Blind Hunter / Edge Case Hunter / Acceptance Auditor, Opus 4.7). **Acceptance Auditor: 14/14 AC PASS, 0 FAIL.** Триаж: **0 decision-needed, 4 patch, 0 defer, ~23 dismissed.**
+
+### Patches
+
+- [x] [Review][Patch] Сырой не-`FileNotFoundError` `OSError` от subprocess `git`/`uv` утекает трейсбеком мимо `main()` [scripts/init/init_project.py:_uv_sync / _git_init_commit] — `_uv_sync` ловит лишь `FileNotFoundError`+`TimeoutExpired`, `_git_init_commit` лишь `FileNotFoundError`; `PermissionError`/WinError 740 при запуске найденного бинаря пролетит мимо except-кортежа `main()` → голый трейсбек (нарушение инварианта «никогда сырой stdlib наружу»; хранилище при этом откатывается). Расширить перехват до `except OSError`.
+- [x] [Review][Patch] git-тесты не изолированы от global/system git-конфига [tests/test_init_project.py:git_identity] — фикстура задаёт только идентичность; `commit.gpgsign=true`/`core.hooksPath`/`init.templateDir` в чужом окружении уронят/подвесят `git commit`. Добавить `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM`=`os.devnull` + `GIT_CONFIG_NOSYSTEM=1`.
+- [x] [Review][Patch] Тавтологичный `pytest.raises(Exception)` [tests/test_init_project.py:test_broken_template_propagates_and_leaves_no_storage] — слишком широко, замаскирует посторонний сбой. Сузить до `StorageTemplateError` (импортировать из `scaffold`).
+- [x] [Review][Patch] Устаревший докстринг примитива `symlinks.py` (перечисляет 4 цели контракта) [scripts/init/symlinks.py:4-7] — после финализации контракт = 6 целей (+`uv.lock`/`.mcp.json`); прозаический текст разошёлся с CSV-SSOT и `docs/init-and-storage.md`. Синхронизировать перечисление.
+
+### Dismissed (с обоснованием — для справки)
+
+- **Resume-ветка `_git_init_commit`** (`.git` уже есть / gitlink-файл) и сценарий «`.env` уже закоммичен» — **недостижимы**: AC #2 (`init_storage`) падает «имя занято» ещё до создания, если `storage_root` существует.
+- **`_rollback` на симлинк-`storage_root`** — недостижимо (AC #2 блокирует симлинк до создания).
+- **Гонка `os.environ[GDAU_DATA_ROOT]` / TOCTOU `exists()→mkdir`** — вне модели «один оператор» (листовой CLI); env восстанавливается в `finally`.
+- **`git diff --cached --quiet` returncode>1** трактуется как «есть staged» — недостижимо после валидированных `init`+`add`; реальный сбой ловит шаг `commit`.
+- **Неполный набор reserved-имён** (`CLOCK$`/`CONIN$`/трейлинг-точка) — `NAME_PATTERN` уже режет `$`/точку/пробел; набор покрывает все matchable-reserved.
+- **Реальный каталог схемы в тесте / host-интерпретатор для БД** — by-design (D9 in-process; `create_views` резолвит собственный каталог; пустые view'ы не зависят от содержимого каталога).
+- **`except Exception` в `_create_database`** — осознанный компромисс под ast-анти-зависимость (`duckdb.Error` ⊄ `RuntimeError`); `BaseException` (KeyboardInterrupt) не проглатывается.
+- **`.env.example` с активным секретом / non-UTF-8** — курируемый UTF-8-артефакт репо, не внешний ввод; пустота токена покрыта тестом AC #3.
+- **D11 `.mcp.json` добавлен** — **ратифицированное** отклонение Шефа (Epic 3 влит PR #19, `.mcp.json` git-tracked); все артефакты синхронизированы, штатный разворот не ломается (предвалидация целей проходит).
+- **Прочее** (избыточная проверка `separators`, `parents[2]`, отсутствие git-таймаута, покрытие отката одним шагом, ast-страж импортов) — by-design / паттерн репо / несущественно.

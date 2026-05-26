@@ -29,6 +29,7 @@ import duckdb
 import pytest
 
 from scripts.utils.catalog import Catalog, CatalogField
+from scripts.utils.database_manager import DatabaseManager
 from scripts.utils.dates import format_date, moscow_yesterday
 from scripts.utils.env_reader import DATA_ROOT_ENV, MetricaCredentials
 from scripts.utils.load_state import ensure_load_state_table
@@ -605,3 +606,57 @@ def test_no_heavy_or_directaiq_infra_imported() -> None:
     }
     offenders = {n for n in imported if n.split(".")[0] in forbidden}
     assert not offenders, f"запрещённые импорты в p81_load_logs: {offenders}"
+
+
+# --- Регрессия #3: view свежезагруженного источника отражает партиции (пере-сборка ПОСЛЕ) --
+
+
+def test_ingest_range_view_reflects_loaded_partition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """После ingest_range view источника отражает свежие партиции, а не пуст (регрессия #3).
+
+    Баг: ``create_views`` зовётся ДО ``load_day``; для источника без партиций
+    ``build_view_ddl`` даёт статичную пустышку (``WHERE false``). Без пересборки ПОСЛЕ записи
+    первый прогон оставлял данные на диске, но view возвращал 0 строк (тихо неверно). Здесь
+    ``create_views`` НЕ подменяется, а итог читается новым read-only соединением (как канал
+    MCP-чтения): до фикса assert упал бы на 0.
+    """
+    monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path))
+    fake = _FakeClient()  # 1 часть, 2 строки visits
+    monkeypatch.setattr(
+        p81, "read_metrica_credentials", lambda: MetricaCredentials(token="t", counter_id=1)
+    )
+    monkeypatch.setattr(p81, "MetricaClient", lambda **kwargs: fake)
+
+    day = _yesterday()
+    result = p81.ingest_range(
+        "visits", day, day, catalog=_catalog(),
+        hot_window_days=0, poll_interval_s=0.0, sleep=_no_sleep,
+    )
+    assert result.total_rows == 2
+
+    # Свежее read-only соединение (как MCP-чтение) — view не пустышка, отражает партицию.
+    with DatabaseManager.connection(read_only=True) as con:
+        assert con.execute("SELECT count(*) FROM visits").fetchone()[0] == 2
+
+
+def test_ingest_day_view_reflects_loaded_partition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """После ingest_day view источника отражает записанную партицию, а не пуст (регрессия #3)."""
+    monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path))
+    fake = _FakeClient()
+    monkeypatch.setattr(
+        p81, "read_metrica_credentials", lambda: MetricaCredentials(token="t", counter_id=1)
+    )
+    monkeypatch.setattr(p81, "MetricaClient", lambda **kwargs: fake)
+
+    day = _yesterday()
+    written = p81.ingest_day(
+        "visits", day, catalog=_catalog(), poll_interval_s=0.0, sleep=_no_sleep
+    )
+    assert written == 2
+
+    with DatabaseManager.connection(read_only=True) as con:
+        assert con.execute("SELECT count(*) FROM visits").fetchone()[0] == 2

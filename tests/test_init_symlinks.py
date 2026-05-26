@@ -250,6 +250,9 @@ def test_shipped_contract_loads_and_targets_exist() -> None:
     (4.3) упал бы SymlinkTargetMissingError. Состав финализирован в 4.3 (D11, решение Шефа): к
     4 стабильным целям добавлены `uv.lock` (нужен для `uv sync --frozen` в хранилище) и `.mcp.json`
     (канал чтения игры — Epic 3 влит, артефакт существует); `.claude` отложен (dev-скилы, не рантайм).
+    `README.md` добавлен после обкатки: `pyproject.toml` объявляет `readme = "README.md"`, и
+    hatchling требует этот файл при editable-сборке в `uv sync` — без симлинка `uv sync --frozen`
+    в хранилище падает «Readme file does not exist».
     """
     rel_paths = load_symlink_contract()  # дефолтный путь = DEFAULT_CONTRACT_PATH
     assert rel_paths == [
@@ -257,6 +260,7 @@ def test_shipped_contract_loads_and_targets_exist() -> None:
         "development-docs",
         "yandex-docs",
         "pyproject.toml",
+        "README.md",
         "uv.lock",
         ".mcp.json",
     ]

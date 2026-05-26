@@ -78,6 +78,19 @@ def test_tool_function_rejects_write(db: Path) -> None:
     assert "только для чтения" in out
 
 
+# --- 3.3 AC #5: docstring/Field рекламируют --context и semantics, без Direct/НДС/goal ----
+
+
+def test_tool_docstring_advertises_context_and_semantics() -> None:
+    """Docstring инструмента упоминает --context и семантику, БЕЗ рекламной Direct/НДС/goal-специфики (3.3)."""
+    doc = server.duckdb_query.__doc__ or ""
+    assert "--context" in doc
+    assert "семантик" in doc  # семантика/семантику колонок упомянута
+    # Рекламной (Яндекс Директ) специфики в описании инструмента нет.
+    for forbidden in ("НДС", "Директ", "PRIMARY_GOAL", "goal"):
+        assert forbidden not in doc, forbidden
+
+
 # --- AC #5: анти-зависимость — в scripts/mcp/** нет вырезанной directaiq-инфры -----------
 
 

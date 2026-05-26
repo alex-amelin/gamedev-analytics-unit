@@ -80,6 +80,34 @@ def test_duckdb_types_returns_storage_to_type_map(tmp_path: Path) -> None:
     }
 
 
+# --- 3.3: Catalog.descriptions — семантика колонок для MCP-контекста (FR-18) ----
+
+
+def test_descriptions_returns_storage_to_description_map(tmp_path: Path) -> None:
+    """descriptions(source) = dict storage_name → description источника (3.3; для MCP-контекста)."""
+    catalog = load_catalog(_write_catalog(tmp_path / "c.csv", _VISITS_ROWS + _HITS_ROWS))
+
+    assert catalog.descriptions("hits") == {
+        "watch_id": "Идентификатор события",
+        "url": "Адрес страницы",
+    }
+
+
+def test_descriptions_invalid_source_raises(tmp_path: Path) -> None:
+    """Невалидный source у descriptions → ValueError (наследуется из fields_for, 3.3)."""
+    catalog = load_catalog(_write_catalog(tmp_path / "c.csv", _VISITS_ROWS))
+    with pytest.raises(ValueError, match="sessions"):
+        catalog.descriptions("sessions")
+
+
+def test_descriptions_empty_description_preserved(tmp_path: Path) -> None:
+    """Пустой description сохраняется как пустая строка (потребитель трактует как unknown, 3.3)."""
+    rows = [["visits", "visit_id", "ym:s:visitID", "HUGEINT", ""]]
+    catalog = load_catalog(_write_catalog(tmp_path / "c.csv", rows))
+
+    assert catalog.descriptions("visits") == {"visit_id": ""}
+
+
 # --- AC #2 (FR-2): список metrica_field источника, без хардкода «на всё» --------
 
 

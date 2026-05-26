@@ -1,0 +1,38 @@
+# .gitignore хранилища игры (per-game storage; своя git-история — `gdau-init` делает `git init`).
+# Зеркалит dev-репо `.gitignore` для секретов/данных/Python + добавляет секцию симлинков инфры.
+
+# --- Python / uv (`uv sync` создаёт `.venv/` и кэши прямо в хранилище) ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Секреты ---
+.env
+.env.*
+!.env.example
+
+# --- Данные и артефакты БД (живут здесь, в git не попадают) ---
+data/
+.writer.lock
+*.duckdb
+*.duckdb.wal
+*.parquet
+
+# --- Инфраструктура юнита приходит СИМЛИНКАМИ из dev-репо (не данные игры) ---
+# Синхронизировать с `templates/paths-to-symlink.csv` (контракт симлинков 4.1):
+# относительные ссылки на dev-репо в git-истории хранилища держать не нужно.
+/scripts
+/development-docs
+/yandex-docs
+/pyproject.toml
+/.mcp.json
+/.claude
+
+# --- OS ---
+.DS_Store
+Thumbs.db

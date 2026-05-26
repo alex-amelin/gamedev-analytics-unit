@@ -9,7 +9,8 @@
 
 # vendored from directaiq @ scripts/mcp/directaiq_mcp_server.py, seam: gdau-брендинг + .env-bootstrap
 # + audit из нашего paths.py + WARNING вместо except:pass;
-# trimmed: config_manager (utils/common.get_config) + goal-плейсхолдеры/Direct-семантика → 3.3.
+# trimmed: config_manager (utils/common.get_config) + goal-плейсхолдеры/Direct-семантика НЕ
+# переносятся принципиально (никогда не вендорились — у геймдева Директа нет, история 3.3 риск №1).
 Развязка швов под наш репозиторий (AC #5): идентификаторы переименованы под gdau
 (``FastMCP("gdau_mcp")``), нет завязки на ``config_manager``/``auth_manager``. 3.2 нарастил
 сервисные команды (в :mod:`scripts.mcp.tools.core`) и **audit-лог** каждого вызова инструмента
@@ -17,6 +18,9 @@
 риск №7/AC #9). ``get_mcp_output_dir`` берётся из нашего ``scripts.utils.paths`` (НЕ из
 directaiq-``utils/common``, его в репо нет). ``readOnlyHint=False`` (3.2: ``--export``/авто-экспорт
 пишут файлы-результаты в ``data/results/`` — как directaiq; в 3.1 экспорта не было → было ``True``).
+3.3 (ФИНАЛ Epic 3) добавил команду ``--context`` (авто-обзор рабочего слоя) и колонку
+``semantics`` в ``--schema TABLE`` — семантика берётся из нашего каталога схемы (FR-18); ``Field``/
+докстринг инструмента это рекламируют. ``readOnlyHint``/``_save_audit_log`` 3.2 не тронуты.
 """
 
 from __future__ import annotations
@@ -104,11 +108,14 @@ def duckdb_query(
             description=(
                 "SQL-запрос ИЛИ сервисная команда к рабочему слою игры (только чтение БД). "
                 "Доступны view'ы `visits` и `hits` (колонки в snake_case). Сервисные команды: "
+                "`--context` — авто-обзор рабочего слоя (объекты, колонки/типы, число строк, "
+                "диапазон дат + что означает каждое поле — семантика из каталога схемы); "
                 "`--tables` — список таблиц/view; `--schema` — схема всех объектов; "
-                "`--schema TABLE` — колонки/типы одной таблицы; `--sample TABLE [N]` — N строк-"
-                'примеров (по умолчанию 5); `--export "SELECT …" file.{csv|parquet|json}` — '
-                "результат SELECT в файл под data/results/. Большой результат (>500 строк) "
-                "авто-экспортируется в data/results/ вместо переполнения ответа. Запись в БД "
+                "`--schema TABLE` — колонки/типы одной таблицы (+ колонка `semantics` — описание "
+                'поля из каталога); `--sample TABLE [N]` — N строк-примеров (по умолчанию 5); '
+                '`--export "SELECT …" file.{csv|parquet|json}` — результат SELECT в файл под '
+                "data/results/. Большой результат (>500 строк) авто-экспортируется в data/results/ "
+                "вместо переполнения ответа. Запись в БД "
                 "(INSERT/UPDATE/DELETE/CREATE/DROP/COPY TO/PRAGMA/…) отклоняется."
             ),
             min_length=1,
@@ -141,8 +148,10 @@ def duckdb_query(
 
     Примеры:
         - ``SELECT count(*) FROM visits``
+        - ``--context`` — обзор всего рабочего слоя (объекты, колонки/типы, сколько строк, за
+          какие даты + что означает каждое поле).
         - ``--tables`` — какие таблицы/view доступны.
-        - ``--schema visits`` — колонки и типы view ``visits``.
+        - ``--schema visits`` — колонки, типы и семантика (описание из каталога) view ``visits``.
         - ``--sample hits 3`` — три строки-примера из ``hits``.
         - ``--export "SELECT * FROM visits" visits.parquet`` — выгрузка в файл.
     """

@@ -15,7 +15,9 @@
 
 from __future__ import annotations
 
+import ast
 import json
+import logging
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -28,6 +30,7 @@ from scripts.mcp.tools import core
 from scripts.utils.catalog import Catalog, CatalogField
 from scripts.utils.database_manager import DatabaseManager
 from scripts.utils.env_reader import DATA_ROOT_ENV
+from scripts.utils.load_state import ensure_load_state_table, mark_loaded
 from scripts.utils.parquet_store import write_partition
 from scripts.utils.paths import get_results_dir
 from scripts.utils.views import create_views
@@ -429,15 +432,27 @@ def test_schema_all_objects(views_db: Path) -> None:
     assert {row["table_name"] for row in parsed["rows"]} >= {"visits", "hits"}
 
 
-def test_schema_single_table_columns_without_semantics(views_db: Path) -> None:
-    """`--schema visits` → колонки/типы visits, БЕЗ колонки semantics (риск №6 — 3.3, AC #1)."""
+def test_schema_single_table_columns_with_semantics(
+    views_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--schema visits` → колонки/типы + колонка `semantics` из каталога (3.3, AC #2).
+
+    Смена контракта 3.2→3.3 (НЕ регресс): 3.2 отдавала ровно `column_name`/`data_type`, 3.3
+    обогащает третьей колонкой `semantics` (описание поля из каталога). Каталог детерминирован
+    через подмену `core.load_catalog` мини-каталогом — тот же, из которого собраны view'ы фикстуры.
+    """
+    monkeypatch.setattr(core, "load_catalog", lambda *a, **k: _catalog())
     parsed = json.loads(core.handle_query("--schema visits", "json", 100))
-    # Ровно две колонки: имя и тип. Никакой колонки семантики/Direct/НДС (это 3.3).
-    assert parsed["columns"] == ["column_name", "data_type"]
-    col_names = {row["column_name"] for row in parsed["rows"]}
-    assert {"visit_id", "watch_ids", "page_views"} <= col_names
-    # Каждая строка несёт строго два поля — semantics не просочилась.
-    assert all(set(row.keys()) == {"column_name", "data_type"} for row in parsed["rows"])
+    # Три колонки: имя, тип и семантика из каталога.
+    assert parsed["columns"] == ["column_name", "data_type", "semantics"]
+    by_col = {row["column_name"]: row["semantics"] for row in parsed["rows"]}
+    assert {"visit_id", "watch_ids", "page_views"} <= set(by_col)
+    # Семантика visit_id — ровно описание из каталога (не Direct/НДС).
+    assert by_col["visit_id"] == "Идентификатор визита"
+    # Каждая строка несёт строго три поля.
+    assert all(
+        set(row.keys()) == {"column_name", "data_type", "semantics"} for row in parsed["rows"]
+    )
 
 
 def test_sample_returns_n_rows(views_db: Path) -> None:
@@ -657,3 +672,267 @@ def test_export_subdirectory_rejected(views_db: Path) -> None:
     assert "подкаталог" in out.lower()
     assert "**SQL Error" not in out  # не сырая ошибка движка с утечкой абсолютного пути
     assert not (get_results_dir() / "sub").exists()
+
+
+# ========================================================================================
+# История 3.3: --context (авто-контекст рабочего слоя) + семантика колонок из каталога.
+# Фикстура context_db = реальные view'ы visits/hits (как views_db) + мета-таблица load_state
+# (её в views_db НЕТ — нужна для AC #1/#8) + подмена core.load_catalog мини-каталогом _catalog()
+# (детерминизм семантики, риск №7: тот же каталог, из которого собраны view'ы).
+# ========================================================================================
+
+
+@pytest.fixture
+def context_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Хранилище для `--context`: view'ы visits(6)/hits(2) + load_state(2), каталог подменён.
+
+    `load_state` добавлена через `ensure_load_state_table`/`mark_loaded` — иначе AC #1 (она в
+    выводе) и AC #8 (её колонки → unknown семантика) непроверяемы (в `views_db` её нет).
+    `core.load_catalog` подменён на `_catalog()` — тот же мини-каталог, из которого собраны
+    view'ы → семантика детерминирована и согласована. Тесты AC #7/#8 переопределяют подмену.
+    """
+    monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path))
+    visits_rows = [[str(i), str(100 + i), "[1,2]", "2026-05-20", str(i)] for i in range(1, 7)]
+    write_partition("visits", "2026-05-20", _VISITS_COLUMNS, visits_rows, catalog=_catalog())
+    hits_rows = [["10", "[1]", "2026-05-20"], ["20", "[2]", "2026-05-20"]]
+    write_partition("hits", "2026-05-20", _HITS_COLUMNS, hits_rows, catalog=_catalog())
+    with DatabaseManager.connection() as conn:
+        create_views(conn, catalog=_catalog())
+        ensure_load_state_table(conn)
+        mark_loaded(conn, "visits", "2026-05-20", 6)
+        mark_loaded(conn, "hits", "2026-05-20", 2)
+    monkeypatch.setattr(core, "load_catalog", lambda *a, **k: _catalog())
+    return tmp_path
+
+
+@pytest.fixture
+def empty_context_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Хранилище с ПУСТЫМИ view'ами visits/hits (нет партиций) — для AC #9.
+
+    `create_views` без партиций строит view `… WHERE false` (2.6): COUNT(*)=0, MIN/MAX=NULL.
+    """
+    monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path))
+    with DatabaseManager.connection() as conn:
+        create_views(conn, catalog=_catalog())  # нет партиций → пустые типизированные view'ы
+    monkeypatch.setattr(core, "load_catalog", lambda *a, **k: _catalog())
+    return tmp_path
+
+
+# --- AC #1: --context перечисляет объекты с колонками/типами, row counts, диапазонами дат --
+
+
+def test_context_lists_objects_with_counts_and_dates(context_db: Path) -> None:
+    """`--context` → секции visits/hits/load_state с числом строк, колонками/типами, датами (AC #1)."""
+    out = core.handle_query("--context")
+    # Объекты присутствуют (по вхождению, НЕ точным набором — в фикстуре могут быть и др. объекты).
+    assert "### visits (6 строк" in out
+    assert "### hits (2 строк" in out
+    assert "### load_state" in out
+    # Колонки с типами.
+    assert "- visit_id: HUGEINT" in out
+    assert "- watch_ids:" in out  # колонка-массив присутствует (тип-строку движка не фиксируем)
+    # Диапазон дат — СТРОКОЙ (CAST AS VARCHAR), не repr Python-объекта date.
+    assert "2026-05-20" in out
+    assert "datetime.date" not in out
+
+
+def test_context_returns_markdown_ignoring_format(context_db: Path) -> None:
+    """`--context` отдаёт markdown-сводку независимо от format (риск №6 — курированный текст)."""
+    out_json = core.handle_query("--context", "json", 100)
+    out_csv = core.handle_query("--context", "csv", 100)
+    # format не меняет вывод: всегда markdown-обзор (заголовок секции на месте, не JSON/CSV).
+    assert out_json == out_csv
+    assert "# Контекст рабочего слоя" in out_json
+
+
+# --- AC #2: семантика колонок из каталога в --context и --schema TABLE --------------------
+
+
+def test_context_includes_catalog_semantics(context_db: Path) -> None:
+    """Семантика колонок в `--context` = описания каталога (AC #2)."""
+    out = core.handle_query("--context")
+    assert "Идентификатор визита" in out  # описание visit_id (visits) из _catalog()
+    assert "Идентификатор события" in out  # описание watch_id (hits) из _catalog()
+
+
+def test_context_multiline_semantics_stays_on_one_line(
+    context_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Описание с переводом строки не разрывает пункт markdown-списка `--context` (review-патч).
+
+    `--context` — курированный markdown: внутренний `\\n` в описании каталога иначе расщепил бы
+    один пункт `- col: type — …` на несколько физических строк. Семантика нормализуется
+    (CR/LF → пробел) — паритет с `_md_escape` для ячеек таблицы на пути `--schema`.
+    """
+    multiline = Catalog(
+        fields=tuple(
+            CatalogField(
+                f.source,
+                f.storage_name,
+                f.metrica_field,
+                f.duckdb_type,
+                "Строка1\nСтрока2" if f.storage_name == "visit_id" else f.description,
+            )
+            for f in _catalog().fields
+        )
+    )
+    monkeypatch.setattr(core, "load_catalog", lambda *a, **k: multiline)
+    out = core.handle_query("--context")
+    # Пункт visit_id целиком на одной строке: описание склеено через пробел, без разрыва.
+    assert "- visit_id: HUGEINT — Строка1 Строка2" in out
+    # Сырого перевода строки внутри описания в выводе нет (список не расщепился).
+    assert "Строка1\nСтрока2" not in out
+
+
+# --- AC #7: каталог недоступен/битый → понятная ошибка строкой, сервер жив ----------------
+
+
+def test_context_broken_catalog_friendly_error(
+    context_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Битый каталог → `--context` отдаёт понятную ошибку строкой, не полу-контекст (AC #7)."""
+    def boom(*a: object, **k: object) -> Catalog:
+        raise ValueError("каталог схемы не найден (битый симлинк)")
+
+    monkeypatch.setattr(core, "load_catalog", boom)
+    out = core.handle_query("--context")
+    assert "Каталог схемы недоступен" in out
+    assert "### visits" not in out  # полу-собранного контекста нет
+
+
+def test_schema_broken_catalog_friendly_error(
+    context_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Битый каталог → `--schema visits` отдаёт понятную ошибку строкой, сервер жив (AC #7)."""
+    def boom(*a: object, **k: object) -> Catalog:
+        raise ValueError("каталог схемы не найден (битый симлинк)")
+
+    monkeypatch.setattr(core, "load_catalog", boom)
+    out = core.handle_query("--schema visits", "json", 100)
+    assert "Каталог схемы недоступен" in out
+    assert "**SQL Error" not in out
+
+
+# --- AC #8: рассинхрон view↔каталог → пустая/«unknown» семантика + WARNING, без KeyError ---
+
+
+def test_context_load_state_columns_unknown_semantics(context_db: Path) -> None:
+    """Объект без записей в каталоге (`load_state`) → колонки с пустой семантикой, без KeyError (AC #8)."""
+    out = core.handle_query("--context")
+    # load_state не в каталоге → его колонки идут с «—» вместо семантики (через dict.get, не индексацию).
+    assert "- source: VARCHAR — —" in out
+    assert "- status: VARCHAR — —" in out
+
+
+def test_schema_load_state_semantics_all_null(context_db: Path) -> None:
+    """`--schema load_state` → колонка semantics есть, значения NULL (нет в каталоге, AC #8)."""
+    parsed = json.loads(core.handle_query("--schema load_state", "json", 100))
+    assert parsed["columns"] == ["column_name", "data_type", "semantics"]
+    assert all(row["semantics"] is None for row in parsed["rows"])  # без KeyError, всё NULL
+
+
+def test_context_drift_column_warns(
+    context_db: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Колонка view-источника, которой нет в каталоге → «—» семантика + WARNING (AC #8).
+
+    Каталог БЕЗ `page_views`, а view `visits` его несёт → рассинхрон: семантика unknown + WARNING
+    (через `dict.get` → None, не `KeyError`).
+    """
+    drift_catalog = Catalog(
+        fields=tuple(f for f in _catalog().fields if f.storage_name != "page_views")
+    )
+    monkeypatch.setattr(core, "load_catalog", lambda *a, **k: drift_catalog)
+
+    with caplog.at_level(logging.WARNING):
+        out = core.handle_query("--context")
+
+    assert "- page_views: INTEGER — —" in out  # unknown семантика, без падения
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("page_views" in r.getMessage() for r in warnings)
+
+
+# --- AC #9: пустые view'ы → row_count=0 и диапазон дат null, без падения ------------------
+
+
+def test_context_empty_views_zero_rows_null_range(empty_context_db: Path) -> None:
+    """Пустые view'ы (нет партиций) → `--context` даёт 0 строк и пустой диапазон дат (AC #9)."""
+    out = core.handle_query("--context")
+    assert "### visits (0 строк)" in out  # 0 строк, без «, date: …» (MIN/MAX по пустому → NULL)
+    assert "### hits (0 строк)" in out
+    assert "**Error" not in out  # ни деления, ни None-разыменования
+
+
+# --- Риск №6: --context до первой выгрузки → дружелюбная подсказка, не сырой RuntimeError --
+
+
+def test_context_before_data_friendly_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Хранилище без gdau.duckdb → `--context` подсказывает `gdau-logs update`, не трейсбек (риск №6)."""
+    monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path))  # каталог есть, БД ещё нет
+    out = core.handle_query("--context")
+    assert "gdau-logs update" in out
+    assert "**Error:** RuntimeError" not in out
+
+
+# --- AC #5: интерфейс цел — duckdb_query(query, format, limit) + сервис-команды 3.1/3.2 ----
+
+
+def test_interface_intact_with_context(context_db: Path) -> None:
+    """`--context` соседствует с произвольным SQL (3.1) и сервис-командами 3.2 — интерфейс цел (AC #5)."""
+    # SQL (3.1)
+    assert json.loads(core.handle_query("SELECT count(*) AS n FROM visits"))["rows"][0]["n"] == 6
+    # --tables / --sample (3.2)
+    assert "visits" in core.handle_query("--tables", "json", 100)
+    assert json.loads(core.handle_query("--sample hits 1"))["total_rows"] == 1
+    # --context (3.3) рядом
+    assert "Контекст рабочего слоя" in core.handle_query("--context")
+
+
+# --- AC #3/#4: directaiq-специфика (Direct/НДС/goal/config) отсутствует в коде core.py -----
+
+
+def _code_identifiers(py_file: Path) -> set[str]:
+    """Идентификаторы, ИСПОЛЬЗУЕМЫЕ в коде (имена/определения/атрибуты) — НЕ из строк/комментариев.
+
+    AST-обход: docstring'и шапки намеренно упоминают эти символы словами («НЕ переносятся») —
+    проверка по подстроке дала бы ложный красный. Берём только реальные code-узлы.
+    """
+    tree = ast.parse(py_file.read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+    return names
+
+
+def test_no_directaiq_money_goal_code_symbols_in_core() -> None:
+    """В коде core.py НЕТ Direct/НДС/goal/config-символов (AC #3/#4 — никогда не вендорились).
+
+    Проверка по реальным code-идентификаторам (ast), НЕ по подстроке: шапка модуля упоминает эти
+    имена словами, фиксируя их принципиальное отсутствие. Замена `_COST_COLUMN_SEMANTICS` —
+    семантика из каталога (`load_catalog`/`Catalog.descriptions`), а не денег/НДС.
+    """
+    used = _code_identifiers(Path(core.__file__))
+    forbidden = {
+        "_COST_COLUMN_SEMANTICS",
+        "_annotate_money_column",
+        "_GENERIC_MONEY_COL_RE",
+        "_MONEY_COL_TYPES",
+        "process_sql_placeholders",
+        "get_config",
+    }
+    offenders = used & forbidden
+    assert not offenders, f"directaiq-символы просочились в код core.py: {offenders}"
+
+
+def test_core_uses_catalog_for_semantics() -> None:
+    """Семантика в core.py берётся из каталога: используются load_catalog/VALID_SOURCES (AC #2)."""
+    used = _code_identifiers(Path(core.__file__))
+    assert "load_catalog" in used
+    assert "VALID_SOURCES" in used

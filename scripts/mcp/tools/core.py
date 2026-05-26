@@ -8,8 +8,10 @@ view'ам ``visits``/``hits`` (2.6). Соединение всегда **read-on
 проходит, т.е. одного ``read_only`` недостаточно.
 
 # vendored from directaiq @ scripts/mcp/tools/core.py, seam: read-only + statement-guard +
-# guard внутреннего SQL экспорта + path-резолверы из нашего paths.py;
-# trimmed: config_manager/placeholders/context/Direct-VAT-semantics/schema-semantics → 3.3.
+# guard внутреннего SQL экспорта + path-резолверы из нашего paths.py + семантика колонок
+# ИЗ НАШЕГО КАТАЛОГА (не Direct/НДС);
+# trimmed: config_manager/goal-плейсхолдеры/Direct-VAT-semantics НЕ переносятся принципиально
+# (никогда не вендорились — у геймдева рекламного Директа нет, см. история 3.3 риск №1).
 Из directaiq перенесены форматтеры (``format_result_*``) и классификатор ошибок
 (``_format_sql_error``); добавлены statement-guard записи (риск №1/AC #7), watchdog-таймаут
 через ``conn.interrupt()`` (риск №2/AC #11 — ``statement_timeout``-PRAGMA в DuckDB нет),
@@ -22,9 +24,17 @@ view'ам ``visits``/``hits`` (2.6). Соединение всегда **read-on
 COPY-хелпер :func:`_run_copy_export`, безопасный :func:`_export_query` (guard внутреннего
 SQL/расширение/traversal/клоббер), ``--schema`` plain через :func:`_handle_schema`,
 двух-слойная валидация имени таблицы (:func:`_validate_table_name` + проверка существования).
-**Не** перенесены (это 3.3): ``--context``/``_handle_context``, goal-плейсхолдеры/
-``config_manager``, Direct/НДС-семантика (``_COST_COLUMN_SEMANTICS``/``_annotate_money_column``)
-и семантика-аннотации в ``--schema`` (у нас plain колонки/типы — у геймдева Директа нет).
+
+3.3 (ФИНАЛ Epic 3, FR-18) замкнул контекст/семантику под **нашу** схему: добавлен
+``--context``/:func:`_handle_context` (объекты/колонки/типы + row counts + диапазоны дат
+рабочего слоя одним вызовом, механика information_schema/COUNT/MIN-MAX адаптирована из
+directaiq), а ``--schema TABLE`` обогащён колонкой ``semantics``. Источник семантики —
+``description`` нашего каталога схемы (FR-16, :meth:`Catalog.descriptions`), это «замена
+``_COST_COLUMN_SEMANTICS``». Direct/НДС-аннотаторы (``_COST_COLUMN_SEMANTICS``/
+``_annotate_money_column``/``_GENERIC_MONEY_COL_RE``), goal-плейсхолдеры
+(``process_sql_placeholders``/``{{PRIMARY_GOAL_ID}}``) и ``config_manager`` здесь
+**отсутствуют как класс** — они не вендорились (закреплено guard/ast-тестами); секции
+``## Money/Goal/Config`` directaiq-контекста НЕ переносятся (директовая разметка, не наша).
 """
 
 from __future__ import annotations
@@ -43,6 +53,7 @@ from typing import Any
 
 import duckdb
 
+from scripts.utils.catalog import VALID_SOURCES, load_catalog
 from scripts.utils.database_manager import DatabaseManager
 from scripts.utils.paths import get_results_dir
 
@@ -573,18 +584,60 @@ def _export_query(sql: str, filename: str) -> str:
         return f"**Error:** {type(exc).__name__}: {exc!s}"
 
 
+def _build_semantics_case(descriptions: dict[str, str]) -> str:
+    """Собрать SQL-выражение ``CASE … END`` семантики колонок из описаний каталога (3.3, AC #2).
+
+    Механика — вендоринг из directaiq ``_handle_schema`` (``WHEN column_name = '{col}' THEN
+    '{semantic}'`` → ``CASE … ELSE NULL END``), но **источник — наш каталог** (``description``),
+    а не Direct/НДС-деньги (риск №1/№4). На колонку с пустым/отсутствующим описанием ветку НЕ
+    добавляем → она попадёт под ``ELSE NULL`` (AC #8: несопоставленная колонка → ``NULL``-семантика
+    без ошибки). Имя колонки и текст экранируются удвоением ``'`` → инъекция через каталог невозможна.
+    Ветвей нет → ``"NULL"`` (вся колонка ``semantics`` = ``NULL``).
+    """
+    cases: list[str] = []
+    for col, description in descriptions.items():
+        if not description:
+            continue  # пустое описание → ветку не добавляем (AC #8: трактуется как unknown → NULL)
+        escaped_col = col.replace("'", "''")
+        escaped_desc = description.replace("'", "''")
+        cases.append(f"WHEN column_name = '{escaped_col}' THEN '{escaped_desc}'")
+    if not cases:
+        return "NULL"
+    return f"CASE {' '.join(cases)} ELSE NULL END"
+
+
 def _handle_schema(table_name: str, output_format: str, limit: int) -> str:
-    """Схема одной таблицы — колонки и типы из ``information_schema`` (plain, БЕЗ семантики, риск №6).
+    """Схема одной таблицы — колонки/типы + семантика колонок ИЗ КАТАЛОГА (3.3, AC #2/#7/#8, риск №4).
 
     Имя ``table_name`` уже прошло :func:`_validate_table_name` (``^[A-Za-z0-9_]+$``) и проверку
     существования. В SQL — квотированный строковый ЛИТЕРАЛ имени (``execute_query`` принимает
     только строку SQL, bind-параметр ``?`` не пробрасывается; regex + удвоение ``'`` → инъекция
-    невозможна). Один источник форматирования — :func:`execute_query`. 3.3 обогатит семантикой
-    каталога; здесь НЕ строим ``CASE … semantics`` и не зовём аннотаторы Direct/НДС.
+    невозможна). Один источник форматирования — :func:`execute_query`.
+
+    3.3 обогатил plain-схему (3.2 отдавала ``column_name, data_type``) колонкой ``semantics``:
+    для источника (``visits``/``hits`` ∈ :data:`VALID_SOURCES`) семантика — ``description``
+    каталога (:meth:`Catalog.descriptions`), для прочих объектов (``load_state``) семантики нет.
+    ``CASE`` строится из описаний (:func:`_build_semantics_case`), несопоставленная колонка →
+    ``ELSE NULL`` (AC #8). Фильтр ``table_schema = 'main'`` сохранён из 3.2 (без него одноимённый
+    объект в ``temp``/``pg_catalog`` задвоил бы строки). Битый/недоступный каталог → понятная
+    ошибка строкой (AC #7, риск №6 — сервер жив); НЕ зовём аннотаторы Direct/НДС (риск №1).
     """
+    try:
+        catalog = load_catalog()
+    except ValueError as exc:
+        # AC #7: каталог недоступен/битый (или битый GDAU_DATA_ROOT) → понятная ошибка строкой,
+        # сервер жив; НЕ отдаём полу-схему без семантики.
+        return f"Каталог схемы недоступен: {exc}"
+
+    # Семантика — только для источников каталога; для прочих объектов (load_state) описаний нет
+    # → semantics_expr == "NULL" (колонка присутствует, значения NULL — AC #8 без KeyError).
+    descriptions = catalog.descriptions(table_name) if table_name in VALID_SOURCES else {}
+    semantics_expr = _build_semantics_case(descriptions)
+
     safe_literal = table_name.replace("'", "''")
     sql = (
-        "SELECT column_name, data_type FROM information_schema.columns "
+        f"SELECT column_name, data_type, {semantics_expr} AS semantics "
+        "FROM information_schema.columns "
         f"WHERE table_schema = 'main' AND table_name = '{safe_literal}' "
         "ORDER BY ordinal_position"
     )
@@ -648,15 +701,153 @@ def _handle_export(cleaned: str) -> str:
     return _export_query(args[0], args[1])
 
 
+# --- Контекст рабочего слоя 3.3 (--context, AC #1/#2/#7/#8/#9) ---------------------------
+
+
+def _first_date_like_column(columns: list[tuple[str, str]]) -> str | None:
+    """Первая date-подобная колонка по порядку (тип ``DATE``/``TIMESTAMP`` или имя ``date``).
+
+    ``columns`` — ``[(имя, тип), …]`` в порядке ``ordinal_position``. Для ``visits``/``hits``
+    это ``date`` (``DATE``); для ``load_state`` — тоже ``date``. По ней считается диапазон дат
+    (``MIN``/``MAX``) в :func:`_handle_context`. Нет date-подобной колонки → ``None`` (диапазона нет).
+    """
+    for name, col_type in columns:
+        if col_type.upper().startswith(("DATE", "TIMESTAMP")) or name.lower() == "date":
+            return name
+    return None
+
+
+def _handle_context() -> str:
+    """Авто-контекст рабочего слоя одним вызовом → markdown-сводка (3.3, AC #1/#2/#7/#8/#9).
+
+    По каждому объекту main-схемы (view'ы ``visits``/``hits`` + мета-таблица ``load_state``):
+    колонки с типом, ``row_count`` (``COUNT(*)``) и диапазон дат (``MIN``/``MAX`` первой
+    date-подобной колонки), плюс семантика колонок из **каталога** (``description``) для
+    источников ``visits``/``hits``. Зовётся НАПРЯМУЮ из :func:`handle_query` (не через
+    :func:`execute_query`), поэтому все ошибки ловятся ВНУТРИ и возвращаются строкой (риск №6:
+    голое исключение порвало бы MCP-сессию) — паритет с :func:`execute_query`.
+
+    Отличия от directaiq ``_handle_context`` (осознанные):
+    - **COUNT считается и для view'ов.** directaiq пропускал ``COUNT(*)`` для VIEW (тяжёлый
+      парсящий view → timeout); наши view'ы — тонкий ``TRY_CAST`` над parquet-glob (COUNT дёшев
+      по метаданным parquet), а AC #1 ТРЕБУЕТ row counts для ``visits``/``hits``.
+    - **Per-object SELECT'ы, не один ``UNION ALL``.** Объектов мало (``visits``/``hits``/
+      ``load_state``) → читаемее два служебных SELECT'а на объект, чем сборка ``UNION ALL``.
+    - **Семантика — из каталога, не из денег/НДС**, и НЕТ секций ``## Money/Goal/Config``
+      (директовая разметка, у геймдева её нет — риск №1).
+
+    Read-only (риск №6): своя ``read_only=True``-conn, ``.writer.lock`` не берётся, БД не
+    мутируется, файлов не пишет. ``--context`` собирает текст сам — ``format`` для него не
+    осмыслен (курированный markdown, как directaiq).
+    """
+    try:
+        # Каталог СНАЧАЛА (риск №5/AC #7): битый/недоступный → выходим строкой ДО сбора контекста,
+        # не отдаём полу-сводку с пустой семантикой.
+        catalog = load_catalog()
+
+        with DatabaseManager.connection(read_only=True) as conn:
+            # Объекты/колонки/типы main-схемы в порядке ordinal_position (квотирование имён ниже).
+            schema_rows = conn.execute(
+                "SELECT table_name, column_name, data_type "
+                "FROM information_schema.columns "
+                "WHERE table_schema = 'main' "
+                "ORDER BY table_name, ordinal_position"
+            ).fetchall()
+
+            if not schema_rows:
+                return (
+                    "_Рабочий слой пуст: в базе нет ни одной таблицы/view. "
+                    "Запусти `gdau-logs update` (приём данных) или `gdau-init` (разворачивание)._"
+                )
+
+            # Группируем колонки по объекту, сохраняя порядок (ordinal_position из ORDER BY).
+            objects: dict[str, list[tuple[str, str]]] = {}
+            for table_name, col_name, col_type in schema_rows:
+                objects.setdefault(str(table_name), []).append(
+                    (str(col_name), str(col_type))
+                )
+
+            sections: list[str] = ["# Контекст рабочего слоя\n"]
+            for obj_name in sorted(objects):
+                columns = objects[obj_name]
+                esc_name = obj_name.replace('"', '""')
+
+                # row_count: COUNT(*) и для view'ов (тонкий TRY_CAST → дёшев; AC #1). Пустой
+                # источник (view WHERE false, 2.6) → 0 без обращения к parquet (AC #9).
+                count_row = conn.execute(f'SELECT COUNT(*) FROM "{esc_name}"').fetchone()
+                row_count = int(count_row[0]) if count_row is not None else 0
+
+                # Диапазон дат по первой date-подобной колонке. CAST AS VARCHAR — иначе DATE/
+                # TIMESTAMP пришли бы Python-объектами date и в markdown попал бы repr, не '2026-05-20'.
+                date_info = ""
+                date_col = _first_date_like_column(columns)
+                if date_col is not None:
+                    esc_dcol = date_col.replace('"', '""')
+                    range_row = conn.execute(
+                        f'SELECT CAST(MIN("{esc_dcol}") AS VARCHAR), '
+                        f'CAST(MAX("{esc_dcol}") AS VARCHAR) FROM "{esc_name}"'
+                    ).fetchone()
+                    # Пустой объект → MIN/MAX = NULL → диапазона нет (AC #9, без None-разыменования).
+                    if range_row is not None and range_row[0] is not None:
+                        date_info = f", {date_col}: {range_row[0]} … {range_row[1]}"
+
+                # Семантика — из каталога только для источников; для load_state и пр. — нет (AC #8).
+                semantics = (
+                    catalog.descriptions(obj_name) if obj_name in VALID_SOURCES else {}
+                )
+
+                sections.append(f"### {obj_name} ({row_count} строк{date_info})")
+                for col_name, col_type in columns:
+                    # AC #8: dict.get (НЕ индексация) — несопоставленная колонка → None, без KeyError.
+                    sem = semantics.get(col_name)
+                    if sem:
+                        # Описание каталога — свободный текст: перевод строки разорвал бы пункт
+                        # markdown-списка на несколько физических строк (паритет с _md_escape для
+                        # ячеек таблицы). '|' в пункте списка безвреден → НЕ экранируем (иначе в
+                        # выводе появился бы лишний '\').
+                        safe_sem = sem.replace("\r", " ").replace("\n", " ")
+                        sections.append(f"- {col_name}: {col_type} — {safe_sem}")
+                    else:
+                        # Колонка источника без описания в каталоге = рассинхрон view↔каталог
+                        # (AC #8) → WARNING. Для НЕ-источников (load_state) семантики нет штатно
+                        # — не шумим.
+                        if obj_name in VALID_SOURCES:
+                            logger.warning(
+                                "Колонка %r объекта %r не сопоставлена каталогу "
+                                "(пустое/отсутствующее description) — семантика unknown",
+                                col_name,
+                                obj_name,
+                            )
+                        sections.append(f"- {col_name}: {col_type} — —")
+                sections.append("")
+
+            return "\n".join(sections)
+
+    except RuntimeError as exc:
+        # До первой выгрузки DatabaseManager (2.1) бросает RuntimeError «… gdau-logs update»
+        # ДО connect → дружелюбный текст строкой (паритет execute_query AC #8, риск №6).
+        return str(exc)
+    except ValueError as exc:
+        # Один класс: битый/недоступный каталог load_catalog (AC #7) И битый/незаданный
+        # GDAU_DATA_ROOT (paths.get_storage_root). НЕ делаем except только под каталог.
+        return f"Каталог схемы недоступен: {exc}"
+    except duckdb.Error as exc:
+        return _format_sql_error(exc, "--context")
+    except Exception as exc:
+        # Риск №6: голых исключений из инструмента наружу не выпускаем — иначе MCP-сессия рвётся.
+        return f"**Error:** {type(exc).__name__}: {exc!s}"
+
+
 def handle_query(
     query: str, output_format: str = "json", limit: int = DEFAULT_LIMIT
 ) -> str:
     """Входная точка инструмента: пустой запрос → подсказка; спец-команда → роутинг; иначе SQL.
 
-    Роутинг спец-команд 3.2 (``--tables``/``--schema [TABLE]``/``--sample TABLE [N]``/``--export``)
-    идёт ПЕРЕД fall-through на произвольный SQL (:func:`execute_query`). Матчим по ``cleaned``
-    (``strip`` сделан здесь — повторно не делаем). ``--context`` (семантика каталога) — НЕ здесь,
-    это 3.3. Любой иной текст — обычный read-SQL к view'ам ``visits``/``hits``.
+    Роутинг спец-команд (``--context``/``--tables``/``--schema [TABLE]``/``--sample TABLE [N]``/
+    ``--export``) идёт ПЕРЕД fall-through на произвольный SQL (:func:`execute_query`). Матчим по
+    ``cleaned`` (``strip`` сделан здесь — повторно не делаем). ``--context`` (3.3) собирает
+    markdown-сводку рабочего слоя сам, мимо ``execute_query``. Любой иной текст — обычный read-SQL
+    к view'ам ``visits``/``hits``.
     """
     cleaned = (query or "").strip()
     if not cleaned:
@@ -665,7 +856,11 @@ def handle_query(
             "например: SELECT count(*) FROM visits."
         )
 
-    # --- Роутинг сервисных команд 3.2 (AC #1) — точные команды раньше префиксных ---
+    # --- Роутинг сервисных команд (AC #1) — точные команды раньше префиксных ---
+    if cleaned == "--context":
+        # 3.3: авто-контекст рабочего слоя (объекты/типы/row counts/диапазоны дат + семантика
+        # каталога). Собирает markdown сам (format игнорируется — курированный текст, риск №6).
+        return _handle_context()
     if cleaned == "--tables":
         # Список таблиц/view рабочего слоя из information_schema (имена snake_case).
         return execute_query(

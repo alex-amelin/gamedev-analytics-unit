@@ -175,6 +175,20 @@ class Catalog:
         """Отображение ``storage_name → duckdb_type`` источника (AC #1; для views.py 2.6)."""
         return {f.storage_name: f.duckdb_type for f in self.fields_for(source)}
 
+    def descriptions(self, source: str) -> dict[str, str]:
+        """Отображение ``storage_name → description`` источника — семантика колонок для MCP (3.3, FR-18).
+
+        Зеркало :meth:`duckdb_types`: проекция полей источника на человекочитаемые
+        описания каталога-SSOT. MCP-контекст (``--context``/``--schema TABLE``, история 3.3)
+        берёт семантику колонок ОТСЮДА — описания не дублируются в коде сервера
+        (project-context: «из каталога генерируется семантика MCP — не дублировать руками»;
+        это «замена ``_COST_COLUMN_SEMANTICS`` directaiq»: у геймдева Direct/НДС-денег нет).
+        ``description`` поля может быть пустым (catalog.py это допускает) — тогда значение —
+        пустая строка; потребитель трактует её как «семантика неизвестна». Невалидный
+        ``source`` (вне :data:`VALID_SOURCES`) → :class:`ValueError` (из :meth:`fields_for`).
+        """
+        return {f.storage_name: f.description for f in self.fields_for(source)}
+
 
 def _require_valid_source(source: str) -> None:
     """Провалидировать имя источника или fail-loud (AC #3)."""

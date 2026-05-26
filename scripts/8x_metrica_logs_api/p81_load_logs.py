@@ -267,7 +267,8 @@ def ingest_day(
     Берёт ``.writer.lock`` **один раз** (AC #3, fail-fast если занят живым писателем),
     открывает write-соединение ``gdau.duckdb`` (2.1), строит :class:`MetricaClient` из кредов
     окружения (1.2; fail-loud ДО сети при отсутствии кредов), заводит чекпойнт-таблицу и
-    типизированные view'ы (идемпотентно, один раз) и зовёт :func:`load_day`. Ad-hoc единичный
+    типизированные view'ы (идемпотентно; пере-определяет их и ПОСЛЕ load_day — иначе свежий
+    источник остался бы пуст, см. ниже) и зовёт :func:`load_day`. Ad-hoc единичный
     прогон одного дня одного источника.
 
     **2.8 НЕ зовёт ``ingest_day`` в цикле** (``writer_lock`` не реентерабелен — повторный
@@ -283,10 +284,10 @@ def ingest_day(
         with DatabaseManager.connection() as conn:  # write-соединение (создаёт БД при отсутствии)
             creds = read_metrica_credentials()  # fail-loud ДО сети, если кредов нет
             client = MetricaClient(token=creds.token, counter_id=creds.counter_id)
-            # Идемпотентно один раз: чекпойнт-таблица (2.4) + типизированные view'ы (2.6).
+            # Чекпойнт-таблица (2.4) + типизированные view'ы (2.6), идемпотентно.
             ensure_load_state_table(conn)
-            create_views(conn)
-            return load_day(
+            create_views(conn, catalog=catalog)
+            rows = load_day(
                 conn,
                 client,
                 source,
@@ -297,6 +298,11 @@ def ingest_day(
                 max_consecutive_errors=max_consecutive_errors,
                 sleep=sleep,
             )
+            # Партиция записана → пере-определяем view'ы поверх неё: до записи source без
+            # партиций даёт пустышку WHERE false (см. ingest_range / views.build_view_ddl),
+            # и без этой пересборки свежезагруженный день остался бы невидим в view.
+            create_views(conn, catalog=catalog)
+            return rows
 
 
 class IngestRangeResult(NamedTuple):
@@ -461,9 +467,12 @@ def ingest_range(
         with DatabaseManager.connection() as conn:  # write-соединение (создаёт БД при отсутствии)
             creds = read_metrica_credentials()  # fail-loud ДО сети, если кредов нет
             client = MetricaClient(token=creds.token, counter_id=creds.counter_id)
-            # Идемпотентно один раз: чекпойнт-таблица (2.4) + типизированные view'ы (2.6).
+            # Чекпойнт-таблица (2.4) + типизированные view'ы (2.6), идемпотентно. View'ы строим
+            # ДО загрузки (слой существует, даже когда грузить нечего) И пере-строим ПОСЛЕ (ниже):
+            # для источника без партиций build_view_ddl даёт статичную пустышку WHERE false — без
+            # пост-пересборки свежезагруженный источник остался бы пуст до следующего прогона.
             ensure_load_state_table(conn)
-            create_views(conn)
+            create_views(conn, catalog=catalog)
             # Инкремент по reconcile (FR-9): подтверждённо-загруженные дни (факт+loaded+
             # row_count). Мутирует load_state (DELETE ложной меты) → строго под локом (риск №3).
             loaded = reconcile(conn, sources=[source])
@@ -497,6 +506,11 @@ def ingest_range(
                     max_consecutive_errors=max_consecutive_errors,
                     sleep=sleep,
                 )
+            if days:
+                # Партиции записаны → пере-определяем view'ы поверх нового сырья: source-view
+                # перестаёт быть пустышкой (WHERE false) и становится ленивым read_parquet,
+                # отражающим загруженные партиции (и будущие). См. views.build_view_ddl.
+                create_views(conn, catalog=catalog)
             return IngestRangeResult(
                 source=source,
                 loaded_dates=days,

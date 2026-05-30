@@ -1,7 +1,7 @@
 """Оркестратор разворачивания per-game хранилища — console-команда ``gdau-init``.
 
 Роль. Одной командой ``gdau-init {game}`` поднимает рабочее пространство одной игры
-рядом с dev-репо (каталог-сосед ``../{game}``) за один проход: проверка свободного имени
+рядом с dev-репо (каталог-сосед ``../{game}-analytics``) за один проход: проверка свободного имени
 → копирование шаблона хранилища (4.2) → симлинки на инфру dev-репо по контракту + preflight
 (4.1) → генерация ``.env`` с корнем хранилища → ``uv sync --frozen`` → ``.pth``-фикс
 (выставить пакет ``scripts`` на путь venv: editable из симлинков его не кладёт) → создание
@@ -13,7 +13,7 @@
 ``scaffold.copy_storage_template`` (4.2), ``symlinks.preflight_symlink_capability``/
 ``create_symlinks`` (4.1), ``DatabaseManager.connection`` (2.1), ``views.create_views`` (2.6),
 ``writer_lock`` (2.5). Оркестратор добавляет ровно то, что есть только на уровне сборки:
-валидацию имени игры, резолюцию пути ``../{game}`` от корня dev-репо (не от cwd), генерацию
+валидацию имени игры, резолюцию пути ``../{game}-analytics`` от корня dev-репо (не от cwd), генерацию
 ``.env``, ``uv sync``, ``git init`` и **полный откат всего хранилища** при сбое любого шага —
 границу, которую примитивы 4.1/4.2 намеренно НЕ делают.
 
@@ -54,7 +54,8 @@ logger = logging.getLogger(__name__)
 __all__ = ["StorageInitError", "init_storage", "main"]
 
 # Зарезервированные Windows-имена (case-insensitive): NAME_PATTERN их не отсекает (`CON`
-# матчит `[A-Za-z0-9_-]+`) — нужен отдельный набор. Имя игры = имя каталога ФС обеих ОС.
+# матчит `[A-Za-z0-9_-]+`) — нужен отдельный набор. Имя игры — основа имени каталога ФС обеих ОС
+# (каталог = `{game}-analytics`, см. STORAGE_NAME_SUFFIX), плюс часть путей симлинков/.gitignore.
 RESERVED_WINDOWS_NAMES = frozenset(
     {"CON", "PRN", "AUX", "NUL"}
     | {f"COM{i}" for i in range(1, 10)}
@@ -73,6 +74,12 @@ UV_SYNC_TIMEOUT = 300
 # editable из симлинк-раскладки, см. _write_scripts_pth). Ведущий `_` → site.py обрабатывает
 # его РАНЬШЕ `pywin32.pth`, чья namespace-папка `win32/scripts` иначе перехватила бы импорт.
 SCRIPTS_PTH_NAME = "_gdau_scripts.pth"
+
+# Суффикс имени папки хранилища: `gdau-init {game}` разворачивает игру в каталог-сосед
+# `../{game}-analytics` (не `../{game}`) — отличает аналитический сторадж от прочих каталогов
+# игры рядом с dev-репо. Суффикс касается ТОЛЬКО имени папки/пути; имя игры (`game`) в логах и
+# git-коммите остаётся без него. Зафиксирован константой (не литералом по коду) — единый источник.
+STORAGE_NAME_SUFFIX = "-analytics"
 
 
 class StorageInitError(RuntimeError):
@@ -156,13 +163,17 @@ def _resolve_dev_repo_root() -> Path:
 def _resolve_storage_root(
     game: str, dev_repo_root: Path, storage_parent: Path | None
 ) -> Path:
-    """Путь хранилища ``{storage_parent}/{game}`` — чистая резолюция (AC #11, D2).
+    """Путь хранилища ``{storage_parent}/{game}-analytics`` — чистая резолюция (AC #11, D2).
 
-    ``storage_parent=None`` → ``dev_repo_root.parent`` (хранилище — сосед dev-репо, ``../{game}``).
-    Никакого ``os.getcwd()``: при разных cwd результат один и тот же (тестируется детерминированно).
+    Имя папки несёт фиксированный суффикс :data:`STORAGE_NAME_SUFFIX` (``-analytics``) — отличает
+    аналитический сторадж от прочих каталогов игры рядом с dev-репо. Суффикс — только в имени
+    папки/пути; имя игры (``game``) в логах и git-коммите остаётся без него.
+    ``storage_parent=None`` → ``dev_repo_root.parent`` (хранилище — сосед dev-репо,
+    ``../{game}-analytics``). Никакого ``os.getcwd()``: при разных cwd результат один и тот же
+    (тестируется детерминированно).
     """
     parent = storage_parent if storage_parent is not None else dev_repo_root.parent
-    return parent / game
+    return parent / f"{game}{STORAGE_NAME_SUFFIX}"
 
 
 def _preflight_environment() -> None:

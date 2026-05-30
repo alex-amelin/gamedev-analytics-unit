@@ -69,7 +69,7 @@ def git_identity(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _make_mini_dev_repo(tmp_path: Path) -> Path:
-    """Собрать мини-dev-репо на ``tmp_path``: шаблон (4 файла) + контракт + цели симлинков.
+    """Собрать мини-dev-репо на ``tmp_path``: шаблон (5 файлов) + контракт + цели симлинков.
 
     Корень назван как реальный dev-репо (``gamedev-analytics-unit``) — резолюция ``../{game}``
     кладёт хранилище соседом. ``_create_database`` использует РЕАЛЬНЫЙ каталог (``load_catalog``
@@ -88,7 +88,8 @@ def _make_mini_dev_repo(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     (tpl / "CLAUDE.md").write_text("# рабочее пространство игры (тест)\n", encoding="utf-8")
-    (tpl / "PROJECT.md").write_text("<!-- заполни: название игры -->\n", encoding="utf-8")
+    (tpl / "gdd.md").write_text("<!-- заполни: название игры -->\n", encoding="utf-8")
+    (tpl / "EVENTS.md").write_text("<!-- заполни: события аналитики -->\n", encoding="utf-8")
     # Контракт симлинков + реальные цели в мини-репо (каталог + файл).
     (dev / "templates" / "paths-to-symlink.csv").write_text(
         "path,comment\nscripts,код\npyproject.toml,манифест\n", encoding="utf-8", newline=""
@@ -246,8 +247,8 @@ def test_full_init_pass(
     assert storage_root == parent / "mygame"
     assert storage_root.is_dir()
 
-    # Шаблон (4 файла) на месте.
-    for name in (".env.example", ".gitignore", "CLAUDE.md", "PROJECT.md"):
+    # Шаблон (5 файлов) на месте.
+    for name in (".env.example", ".gitignore", "CLAUDE.md", "gdd.md", "EVENTS.md"):
         assert (storage_root / name).is_file(), f"нет файла шаблона: {name}"
 
     # Симлинки указывают в dev-репо (относительные); чтение сквозь линк отдаёт dev-репо.
@@ -292,7 +293,7 @@ def test_full_init_pass(
         ["git", "ls-files"], cwd=storage_root, capture_output=True, text=True
     ).stdout.split()
     assert ".env" not in tracked, ".env попал в коммит (нарушение AC #4)"
-    assert ".env.example" in tracked and "PROJECT.md" in tracked
+    assert ".env.example" in tracked and "gdd.md" in tracked and "EVENTS.md" in tracked
 
 
 def _env_value(env_text: str, var: str) -> str | None:
@@ -374,7 +375,7 @@ def test_broken_template_propagates_and_leaves_no_storage(
     появляется; ошибка пробрасывается, откат — no-op (чистить нечего).
     """
     dev = _make_mini_dev_repo(tmp_path)
-    (dev / "templates" / "external_storage" / "PROJECT.md").unlink()  # битый шаблон
+    (dev / "templates" / "external_storage" / "gdd.md").unlink()  # битый шаблон
     parent = tmp_path / "sp"
     parent.mkdir()
 

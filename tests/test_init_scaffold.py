@@ -2,15 +2,15 @@
 
 Покрывают две части истории (параллель с 4.1: статический артефакт + примитив-потребитель):
 
-- **Контент статического шаблона** ``templates/external_storage/`` (AC #1, #4): четыре
-  обязательных файла на месте; ``.env.example`` несёт обе переменные кредов без вписанных
+- **Контент статического шаблона** ``templates/external_storage/`` (AC #1, #4): пять
+  обязательных файлов на месте; ``.env.example`` несёт обе переменные кредов без вписанных
   значений (страж «не закоммитили секрет» — по конкретным строкам-переменным, а не по всем,
   чтобы комментарии не валили проверку); ``.gitignore`` игнорит секреты/данные/симлинк-пути и
-  хранит ``!.env.example``; ``PROJECT.md`` — очевидная болванка с плейсхолдером; **страж
-  урезанности** (нет ``.claude/``, нет directaiq/marketing-маркеров — кейс-инсенситивно).
+  хранит ``!.env.example``; ``gdd.md``/``EVENTS.md`` — очевидные болванки с плейсхолдером;
+  **страж урезанности** (нет ``.claude/``, нет directaiq/marketing-маркеров — кейс-инсенситивно).
 - **Примитив** :func:`copy_storage_template` на ``tmp_path`` (AC #2, #5, #6): копирование
-  четырёх файлов; fail-loud **ДО** мутаций при отсутствии/битости шаблона (``storage_root`` не
-  создаётся); сохранение заполненного владельцем ``PROJECT.md`` при повторном init.
+  пяти файлов; fail-loud **ДО** мутаций при отсутствии/битости шаблона (``storage_root`` не
+  создаётся); сохранение заполненных владельцем ``gdd.md``/``EVENTS.md`` при повторном init.
 
 Анти-зависимость — по реальным import-узлам (``ast``, не подстрока, как ``test_parquet_store``):
 ``scaffold`` знает только ФС + ``shutil``, без ``paths``/``database_manager``/``duckdb``/
@@ -48,7 +48,7 @@ _DIRECTAIQ_MARKERS = (
 
 
 def _make_template(root: Path) -> dict[str, str]:
-    """Собрать на ``root`` минимальный валидный шаблон (4 файла) с уникальным контентом.
+    """Собрать на ``root`` минимальный валидный шаблон (5 файлов) с уникальным контентом.
 
     Возвращает отображение имя→контент для последующей сверки идентичности копии.
     """
@@ -57,7 +57,8 @@ def _make_template(root: Path) -> dict[str, str]:
         ".env.example": "YANDEX_METRICA_TOKEN=\nYANDEX_METRICA_COUNTER_ID=\n",
         ".gitignore": ".env\ndata/\n.writer.lock\n!.env.example\n",
         "CLAUDE.md": "# рабочее пространство игры (тест)\n",
-        "PROJECT.md": "<!-- заполни: название игры -->\n",
+        "gdd.md": "<!-- заполни: название игры -->\n",
+        "EVENTS.md": "<!-- заполни: события аналитики -->\n",
     }
     for name, text in content.items():
         (root / name).write_text(text, encoding="utf-8")
@@ -68,7 +69,7 @@ def _make_template(root: Path) -> dict[str, str]:
 
 
 def test_real_template_has_required_files() -> None:
-    """Все 4 обязательных файла существуют в ``templates/external_storage/`` (AC #1)."""
+    """Все 5 обязательных файлов существуют в ``templates/external_storage/`` (AC #1)."""
     assert DEFAULT_TEMPLATE_ROOT.is_dir(), f"нет каталога шаблона: {DEFAULT_TEMPLATE_ROOT}"
     for name in REQUIRED_TEMPLATE_FILES:
         assert (DEFAULT_TEMPLATE_ROOT / name).is_file(), f"нет файла шаблона: {name}"
@@ -105,11 +106,12 @@ def test_real_gitignore_ignores_secrets_data_and_symlinks() -> None:
         assert needle in text, f".gitignore не перечисляет симлинк-путь {needle!r}"
 
 
-def test_real_project_md_is_nonempty_placeholder() -> None:
-    """``PROJECT.md`` непустой и содержит маркер-плейсхолдер болванки (AC #2, FR-21)."""
-    text = (DEFAULT_TEMPLATE_ROOT / "PROJECT.md").read_text(encoding="utf-8")
-    assert text.strip(), "PROJECT.md пуст"
-    assert "заполни" in text.lower() or "<!--" in text, "нет маркера-плейсхолдера"
+def test_real_gdd_and_events_are_nonempty_placeholders() -> None:
+    """``gdd.md`` и ``EVENTS.md`` непустые и несут маркер-плейсхолдер болванки (AC #2, FR-21)."""
+    for name in ("gdd.md", "EVENTS.md"):
+        text = (DEFAULT_TEMPLATE_ROOT / name).read_text(encoding="utf-8")
+        assert text.strip(), f"{name} пуст"
+        assert "заполни" in text.lower() or "<!--" in text, f"в {name} нет маркера-плейсхолдера"
 
 
 def test_real_template_is_trimmed_no_directaiq() -> None:
@@ -125,7 +127,7 @@ def test_real_template_is_trimmed_no_directaiq() -> None:
 
 
 def test_copy_creates_all_files_on_fresh_storage(tmp_path: Path) -> None:
-    """AC #2: копирование в несуществующий ``storage_root`` создаёт его и все 4 файла."""
+    """AC #2: копирование в несуществующий ``storage_root`` создаёт его и все 5 файлов."""
     template_root = tmp_path / "template"
     content = _make_template(template_root)
     storage_root = tmp_path / "game"
@@ -156,33 +158,38 @@ def test_incomplete_template_fails_before_mutations(tmp_path: Path) -> None:
     """AC #5: не хватает обязательного файла → fail-loud, ``storage_root`` не создан/пуст."""
     template_root = tmp_path / "template"
     _make_template(template_root)
-    (template_root / "PROJECT.md").unlink()  # битый шаблон: нет обязательного файла
+    (template_root / "gdd.md").unlink()  # битый шаблон: нет обязательного файла
     storage_root = tmp_path / "game"
     with pytest.raises(StorageTemplateError):
         copy_storage_template(storage_root=storage_root, template_root=template_root)
     assert not storage_root.exists(), "storage_root создан при битом шаблоне (нарушение AC #5)"
 
 
-def test_repeat_init_preserves_filled_project_md(tmp_path: Path) -> None:
-    """AC #6: заполненный владельцем ``PROJECT.md`` не затирается; остальные обновляются."""
+def test_repeat_init_preserves_filled_owner_files(tmp_path: Path) -> None:
+    """AC #6: заполненные владельцем ``gdd.md`` и ``EVENTS.md`` не затираются; остальные обновляются."""
     template_root = tmp_path / "template"
     content = _make_template(template_root)
     storage_root = tmp_path / "game"
     storage_root.mkdir()
-    owner_text = "# Игра «Кысь»\n\nплатформа: web; счётчик 12345\n"
-    (storage_root / "PROJECT.md").write_text(owner_text, encoding="utf-8")
+    owner_files = {
+        "gdd.md": "# Игра «Кысь»\n\nплатформа: web; счётчик 12345\n",
+        "EVENTS.md": "# События\n\n| purchase | ym:s:goal_1 | покупка | оплата прошла |\n",
+    }
+    for name, text in owner_files.items():
+        (storage_root / name).write_text(text, encoding="utf-8")
 
     copied = copy_storage_template(storage_root=storage_root, template_root=template_root)
 
-    # PROJECT.md в PRESERVE_ON_REPEAT → текст владельца сохранён.
-    assert "PROJECT.md" in PRESERVE_ON_REPEAT
-    assert (storage_root / "PROJECT.md").read_text(encoding="utf-8") == owner_text
+    # Оба файла в PRESERVE_ON_REPEAT → текст владельца сохранён дословно.
+    for name, owner_text in owner_files.items():
+        assert name in PRESERVE_ON_REPEAT
+        assert (storage_root / name).read_text(encoding="utf-8") == owner_text
     # Прочие служебные файлы обновлены из шаблона.
     for name in (".env.example", ".gitignore", "CLAUDE.md"):
         assert (storage_root / name).read_text(encoding="utf-8") == content[name]
-    # Контракт возврата: пропущенный PROJECT.md НЕ входит в copied (докстринг copy_storage_template).
-    assert "PROJECT.md" not in {p.name for p in copied}
-    assert len(copied) == len(REQUIRED_TEMPLATE_FILES) - 1  # 3 файла: все, кроме сохранённого
+    # Контракт возврата: пропущенные gdd.md/EVENTS.md НЕ входят в copied (докстринг copy_storage_template).
+    assert {"gdd.md", "EVENTS.md"}.isdisjoint({p.name for p in copied})
+    assert len(copied) == len(REQUIRED_TEMPLATE_FILES) - 2  # 3 служебных, без двух сохранённых
 
 
 def test_smoke_copy_real_template(tmp_path: Path) -> None:

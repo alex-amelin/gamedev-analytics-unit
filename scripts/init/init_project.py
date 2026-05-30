@@ -331,7 +331,7 @@ def _git_init_commit(storage_root: Path, game: str, run: CommandRunner) -> None:
     ``storage/.git`` (AC #8 — изоляция; вложенность в чужой репо git разруливает сам). Уже есть
     ``.git`` (resume) → пропускаем ``git init``, но add+commit идемпотентно. ``.env`` исключаем
     из индекса явным ``git reset -- .env`` (AC #4, пояс-и-подтяжки поверх ``.gitignore`` шаблона).
-    Коммитим только при непустом индексе (AC #13: 4 файла шаблона минус ``.env`` → непусто). Сбой
+    Коммитим только при непустом индексе (AC #13: файлы шаблона минус ``.env`` → непусто). Сбой
     git → :class:`StorageInitError` (откат у :func:`init_storage`).
     """
     git_dir = storage_root / ".git"

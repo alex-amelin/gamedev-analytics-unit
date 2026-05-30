@@ -160,22 +160,33 @@ def test_invalid_game_names_fail_loud(name: str) -> None:
 def test_resolve_storage_root_is_dev_repo_parent_not_cwd(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``_resolve_storage_root`` = ``dev_repo_root.parent / game`` независимо от cwd (AC #11, D2)."""
+    """``_resolve_storage_root`` = ``dev_repo_root.parent / {game}-analytics`` независимо от cwd (AC #11, D2)."""
     dev = tmp_path / "a" / "b" / "gamedev-analytics-unit"
     other = tmp_path / "elsewhere"
     other.mkdir(parents=True)
     monkeypatch.chdir(other)
-    assert _resolve_storage_root("mygame", dev, None) == dev.parent / "mygame"
+    assert _resolve_storage_root("mygame", dev, None) == dev.parent / "mygame-analytics"
     # Смена cwd не меняет результат — резолюция чистая, не от текущего каталога.
     monkeypatch.chdir(tmp_path)
-    assert _resolve_storage_root("mygame", dev, None) == dev.parent / "mygame"
+    assert _resolve_storage_root("mygame", dev, None) == dev.parent / "mygame-analytics"
 
 
 def test_resolve_storage_root_honors_explicit_parent(tmp_path: Path) -> None:
     """Явный ``storage_parent`` перекрывает дефолт ``dev_repo_root.parent``."""
     dev = tmp_path / "dev"
     parent = tmp_path / "games"
-    assert _resolve_storage_root("g", dev, parent) == parent / "g"
+    assert _resolve_storage_root("g", dev, parent) == parent / "g-analytics"
+
+
+def test_resolve_storage_root_appends_analytics_suffix(tmp_path: Path) -> None:
+    """Имя папки хранилища несёт суффикс ``-analytics``; имя игры в путь не попадает «голым»."""
+    dev = tmp_path / "dev"
+    parent = tmp_path / "games"
+    resolved = _resolve_storage_root("mygame", dev, parent)
+    assert resolved.name == "mygame-analytics"
+    assert resolved == parent / "mygame-analytics"
+    # Имя игры, уже оканчивающееся на суффикс → буквальный append (намеренно не защищаем).
+    assert _resolve_storage_root("foo-analytics", dev, parent).name == "foo-analytics-analytics"
 
 
 def test_name_taken_resolves_from_dev_repo_parent_not_cwd(
@@ -183,7 +194,7 @@ def test_name_taken_resolves_from_dev_repo_parent_not_cwd(
 ) -> None:
     """init_storage ищет ``dev_repo_root.parent / game``, не ``cwd / game`` (AC #11 через AC #2)."""
     dev = _make_mini_dev_repo(tmp_path)
-    (dev.parent / "mygame").mkdir()  # занято соседом dev-репо
+    (dev.parent / "mygame-analytics").mkdir()  # занято соседом dev-репо
     other = tmp_path / "elsewhere"  # в cwd «mygame» НЕТ
     other.mkdir()
     monkeypatch.chdir(other)
@@ -199,7 +210,7 @@ def test_name_taken_fails_loud_and_untouched(tmp_path: Path) -> None:
     dev = _make_mini_dev_repo(tmp_path)
     parent = tmp_path / "sp"
     parent.mkdir()
-    existing = parent / "mygame"
+    existing = parent / "mygame-analytics"
     existing.mkdir()
     (existing / "owner.txt").write_text("данные владельца", encoding="utf-8")
 
@@ -225,7 +236,7 @@ def test_git_missing_preflight_fails_loud_before_mutations(
     )
     with pytest.raises(StorageInitError, match="git не найден"):
         init_storage("mygame", dev_repo_root=dev, storage_parent=parent)
-    assert not (parent / "mygame").exists()  # preflight ДО мутаций — хранилища нет
+    assert not (parent / "mygame-analytics").exists()  # preflight ДО мутаций — хранилища нет
 
 
 # --- AC #1, #3, #4, #13, #14: полный проход (capability-gated симлинки) ------------------
@@ -244,7 +255,7 @@ def test_full_init_pass(
         "mygame", dev_repo_root=dev, storage_parent=parent, runner=_real_git_fake_uv(calls)
     )
 
-    assert storage_root == parent / "mygame"
+    assert storage_root == parent / "mygame-analytics"
     assert storage_root.is_dir()
 
     # Шаблон (5 файлов) на месте.
@@ -289,6 +300,11 @@ def test_full_init_pass(
         ["git", "log", "--oneline"], cwd=storage_root, capture_output=True, text=True
     )
     assert log.returncode == 0 and log.stdout.strip(), "нет initial commit (пуст?)"
+    # Сообщение коммита несёт имя игры БЕЗ суффикса -analytics (суффикс — только в имени папки).
+    subject = subprocess.run(
+        ["git", "log", "-1", "--format=%s"], cwd=storage_root, capture_output=True, text=True
+    ).stdout.strip()
+    assert "mygame" in subject and "mygame-analytics" not in subject, subject
     tracked = subprocess.run(
         ["git", "ls-files"], cwd=storage_root, capture_output=True, text=True
     ).stdout.split()
@@ -359,7 +375,7 @@ def test_rollback_removes_storage_and_keeps_symlink_targets(
     with pytest.raises(StorageInitError, match="uv sync"):
         init_storage("mygame", dev_repo_root=dev, storage_parent=parent, runner=failing_uv)
 
-    storage_root = parent / "mygame"
+    storage_root = parent / "mygame-analytics"
     assert not storage_root.exists(), "хранилище не откатано целиком (AC #6)"
     # КРИТИЧНО: цель инфра-симлинка (dev-репо) цела — rmtree снял ссылку, не тронул содержимое.
     assert (dev / "scripts" / "marker.txt").read_text(encoding="utf-8") == "я в dev-репо"
@@ -381,7 +397,7 @@ def test_broken_template_propagates_and_leaves_no_storage(
 
     with pytest.raises(StorageTemplateError):  # 4.2 бросает его на битом шаблоне ДО мутаций
         init_storage("mygame", dev_repo_root=dev, storage_parent=parent)
-    assert not (parent / "mygame").exists()
+    assert not (parent / "mygame-analytics").exists()
 
 
 # --- argparse-поверхность ----------------------------------------------------------------

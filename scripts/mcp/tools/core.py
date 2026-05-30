@@ -584,43 +584,25 @@ def _export_query(sql: str, filename: str) -> str:
         return f"**Error:** {type(exc).__name__}: {exc!s}"
 
 
-def _build_semantics_case(descriptions: dict[str, str]) -> str:
-    """Собрать SQL-выражение ``CASE … END`` семантики колонок из описаний каталога (3.3, AC #2).
-
-    Механика — вендоринг из directaiq ``_handle_schema`` (``WHEN column_name = '{col}' THEN
-    '{semantic}'`` → ``CASE … ELSE NULL END``), но **источник — наш каталог** (``description``),
-    а не Direct/НДС-деньги (риск №1/№4). На колонку с пустым/отсутствующим описанием ветку НЕ
-    добавляем → она попадёт под ``ELSE NULL`` (AC #8: несопоставленная колонка → ``NULL``-семантика
-    без ошибки). Имя колонки и текст экранируются удвоением ``'`` → инъекция через каталог невозможна.
-    Ветвей нет → ``"NULL"`` (вся колонка ``semantics`` = ``NULL``).
-    """
-    cases: list[str] = []
-    for col, description in descriptions.items():
-        if not description:
-            continue  # пустое описание → ветку не добавляем (AC #8: трактуется как unknown → NULL)
-        escaped_col = col.replace("'", "''")
-        escaped_desc = description.replace("'", "''")
-        cases.append(f"WHEN column_name = '{escaped_col}' THEN '{escaped_desc}'")
-    if not cases:
-        return "NULL"
-    return f"CASE {' '.join(cases)} ELSE NULL END"
-
-
 def _handle_schema(table_name: str, output_format: str, limit: int) -> str:
     """Схема одной таблицы — колонки/типы + семантика колонок ИЗ КАТАЛОГА (3.3, AC #2/#7/#8, риск №4).
 
     Имя ``table_name`` уже прошло :func:`_validate_table_name` (``^[A-Za-z0-9_]+$``) и проверку
-    существования. В SQL — квотированный строковый ЛИТЕРАЛ имени (``execute_query`` принимает
-    только строку SQL, bind-параметр ``?`` не пробрасывается; regex + удвоение ``'`` → инъекция
-    невозможна). Один источник форматирования — :func:`execute_query`.
+    существования. SQL читает только ``column_name``/``data_type`` из ``information_schema`` с
+    квотированным строковым ЛИТЕРАЛОМ имени (regex + удвоение ``'`` → инъекция невозможна).
 
     3.3 обогатил plain-схему (3.2 отдавала ``column_name, data_type``) колонкой ``semantics``:
     для источника (``visits``/``hits`` ∈ :data:`VALID_SOURCES`) семантика — ``description``
-    каталога (:meth:`Catalog.descriptions`), для прочих объектов (``load_state``) семантики нет.
-    ``CASE`` строится из описаний (:func:`_build_semantics_case`), несопоставленная колонка →
-    ``ELSE NULL`` (AC #8). Фильтр ``table_schema = 'main'`` сохранён из 3.2 (без него одноимённый
-    объект в ``temp``/``pg_catalog`` задвоил бы строки). Битый/недоступный каталог → понятная
-    ошибка строкой (AC #7, риск №6 — сервер жив); НЕ зовём аннотаторы Direct/НДС (риск №1).
+    каталога (:meth:`Catalog.descriptions`), для прочих объектов (``load_state``) семантики нет
+    (``None``). **Семантика приклеивается в Python, а НЕ встраивается в SQL-литерал** (как в
+    :func:`_handle_context`): описания каталога — свободный текст с ``;``
+    (``screen_format``/``events_product_type``/``device_category``), а встроенный в SQL ``;`` ловил
+    guard мульти-стейтмента (:func:`_reject_if_not_readonly`) и рубил всю команду ложным отказом
+    «несколько стейтментов» — на реальном каталоге ``--schema visits``/``--schema hits`` вообще не
+    работали (поймано обкаткой 2026-05-26; offline-фикстура ``_catalog()`` была без ``;``).
+    Пустое/отсутствующее описание → ``None`` (AC #8, паритет со старым ``ELSE NULL``). Фильтр
+    ``table_schema = 'main'`` сохранён из 3.2 (одноимённый объект в ``temp``/``pg_catalog`` задвоил
+    бы строки). Битый/недоступный каталог → понятная ошибка строкой (AC #7, риск №6 — сервер жив).
     """
     try:
         catalog = load_catalog()
@@ -629,19 +611,43 @@ def _handle_schema(table_name: str, output_format: str, limit: int) -> str:
         # сервер жив; НЕ отдаём полу-схему без семантики.
         return f"Каталог схемы недоступен: {exc}"
 
-    # Семантика — только для источников каталога; для прочих объектов (load_state) описаний нет
-    # → semantics_expr == "NULL" (колонка присутствует, значения NULL — AC #8 без KeyError).
+    # Семантика — только для источников каталога; для прочих объектов (load_state) описаний нет.
     descriptions = catalog.descriptions(table_name) if table_name in VALID_SOURCES else {}
-    semantics_expr = _build_semantics_case(descriptions)
 
     safe_literal = table_name.replace("'", "''")
     sql = (
-        f"SELECT column_name, data_type, {semantics_expr} AS semantics "
-        "FROM information_schema.columns "
+        "SELECT column_name, data_type FROM information_schema.columns "
         f"WHERE table_schema = 'main' AND table_name = '{safe_literal}' "
         "ORDER BY ordinal_position"
     )
-    return execute_query(sql, output_format, limit)
+
+    fmt = output_format if output_format in _SUPPORTED_FORMATS else "json"
+    display_limit = _clamp_limit(limit)
+    try:
+        # Свой read-only conn (как _handle_context/_check_table_exists): SQL фиксированный и
+        # server-built (только information_schema), guard записи здесь не нужен.
+        with DatabaseManager.connection(read_only=True) as conn:
+            rows = _execute_with_timeout(conn, sql, STATEMENT_TIMEOUT_S)
+    except RuntimeError as exc:
+        # AC #8: БД ещё не создана → понятный текст «… gdau-logs update», не сырой IOException.
+        return str(exc)
+    except duckdb.Error as exc:
+        return _format_sql_error(exc, sql)
+
+    # Семантику приклеиваем в Python, НЕ в SQL: описание — свободный текст с ';' иначе попало бы в
+    # SQL-литерал и было бы зарублено guard'ом мульти-стейтмента. Пустое/отсутствующее описание →
+    # None (паритет со старым CASE … ELSE NULL: несопоставленная/пустая колонка = unknown, AC #8).
+    columns = ["column_name", "data_type", "semantics"]
+    enriched: list[tuple[Any, ...]] = [
+        (str(col_name), str(data_type), descriptions.get(str(col_name)) or None)
+        for col_name, data_type in rows
+    ]
+
+    if fmt == "json":
+        return format_result_json(columns, enriched, display_limit)
+    if fmt == "csv":
+        return format_result_csv(columns, enriched, display_limit)
+    return format_result_markdown(columns, enriched, display_limit)
 
 
 def _handle_sample(cleaned: str, output_format: str, limit: int) -> str:

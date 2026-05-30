@@ -455,6 +455,42 @@ def test_schema_single_table_columns_with_semantics(
     )
 
 
+def test_schema_semantics_with_semicolons_not_rejected(
+    views_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--schema visits` с ';' в описании каталога → схема, а не ложный отказ guard (регресс обкатки).
+
+    Реальные описания каталога несут ';' (`screen_format`: «Возможные значения:; - undefined;; …»,
+    `events_product_type`, `device_category`). Семантика приклеивается в Python, а НЕ встраивается
+    в SQL-литерал — иначе guard мульти-стейтмента (`_reject_if_not_readonly`) рубил бы любой ';' и
+    ломал документированную команду «несколько стейтментов». offline-фикстура `_catalog()` была без
+    ';', поэтому баг ловился только обкаткой на реальном каталоге (2026-05-26).
+    """
+    semis = "Соотношение сторон. Возможные значения:; - undefined;; - 9:21;; - 16:9."
+    catalog_with_semis = Catalog(
+        fields=tuple(
+            CatalogField(
+                f.source,
+                f.storage_name,
+                f.metrica_field,
+                f.duckdb_type,
+                semis if f.storage_name == "page_views" else f.description,
+            )
+            for f in _catalog().fields
+        )
+    )
+    monkeypatch.setattr(core, "load_catalog", lambda *a, **k: catalog_with_semis)
+    out = core.handle_query("--schema visits", "json", 100)
+    # Не ложный отказ guard — реальная схема вернулась.
+    assert "только для чтения" not in out
+    assert "стейтмент" not in out
+    parsed = json.loads(out)
+    assert parsed["columns"] == ["column_name", "data_type", "semantics"]
+    by_col = {row["column_name"]: row["semantics"] for row in parsed["rows"]}
+    # Описание с ';' доехало до агента целиком, не урезано и не зарублено.
+    assert by_col["page_views"] == semis
+
+
 def test_sample_returns_n_rows(views_db: Path) -> None:
     """`--sample visits 3` → не более 3 строк-примеров (AC #1)."""
     parsed = json.loads(core.handle_query("--sample visits 3", "json", 100))
